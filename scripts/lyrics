@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import lyricslib as lib
+
+
+SCRIPT = Path(__file__).resolve()
+FETCH_GO_SCRIPT = SCRIPT.with_name("lyrics-fetch-go")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--run", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
+
+    if args.run:
+        return run_terminal(debug=args.debug)
+    return launch_kitty(debug=args.debug)
+
+
+def launch_kitty(debug: bool = False) -> int:
+    missing = [name for name in ("kitty", "playerctl", "python3") if not shutil.which(name)]
+    if missing:
+        print("lyrics: faltam dependências:", file=sys.stderr)
+        for name in missing:
+            print(f"  - {name}", file=sys.stderr)
+        return 1
+
+    cmd = [
+        "kitty",
+        "--detach",
+        "--override",
+        f"font_family={lib.FONT_FAMILY}",
+        "--override",
+        f"font_size={lib.FONT_SIZE}",
+        "--title",
+        "Lyrics",
+        "bash",
+        "-lc",
+        f"{shlex.quote(str(SCRIPT))} {' '.join(shlex.quote(flag) for flag in runtime_flags(debug))}",
+    ]
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return 0
+
+
+def runtime_flags(debug: bool) -> list[str]:
+    flags = ["--run"]
+    if debug:
+        flags.insert(0, "--debug")
+    return flags
+
+
+def run_terminal(debug: bool = False) -> int:
+    lib.DEBUG = debug
+    lib.setup_terminal()
+    try:
+        missing = [name for name in ("playerctl", "python3") if not shutil.which(name)]
+        if missing:
+            lib.render_message("Dependencies missing", ["Instale:", *[f"- {name}" for name in missing]])
+            return 1
+
+        status = lib.spotify_status()
+        lib.debug_log("spotify_status", status or "unknown")
+        if status != "playing":
+            lib.render_message(
+                "Spotify not playing",
+                [
+                    "Abra o Spotify e inicie uma música.",
+                    "Depois rode `lyrics` de novo.",
+                ],
+            )
+            return 0
+
+        track = lib.get_track_info()
+        if not track:
+            lib.render_message("No track metadata", ["Não consegui ler os metadados do Spotify."])
+            return 1
+
+        lib.debug_log("track", f"{track.artist} - {track.title}")
+        local_path = lib.find_local_lrc(track)
+        lib.debug_log("local_lrc", str(local_path) if local_path else "missing")
+
+        if local_path:
+            return exec_lyrics_local(debug=debug)
+
+        spawn_background_fetch(track, debug=debug)
+        return stream_sptlrx(track)
+    finally:
+        lib.restore_terminal()
+
+
+def exec_lyrics_local(debug: bool = False) -> int:
+    cmd = [sys.executable, str(Path(__file__).with_name("lyrics-local"))]
+    if debug:
+        cmd.append("--debug")
+    cmd.append("--run")
+    lib.debug_log("lyrics_local", {"cmd": cmd})
+    return subprocess.call(cmd)
+
+
+def spawn_background_fetch(track: lib.TrackInfo, debug: bool = False) -> None:
+    if not FETCH_GO_SCRIPT.exists():
+        lib.debug_log("fetch_spawn_failed", "lyrics-fetch-go missing")
+        return
+    cmd = [str(FETCH_GO_SCRIPT), "--no-spotify", "--artist", track.artist, "--title", track.title]
+    if track.album:
+        cmd.extend(["--album", track.album])
+    if track.duration_ms:
+        cmd.extend(["--duration", str(max(0, int(track.duration_ms / 1000)))])
+    if track.track_id:
+        cmd.extend(["--track-id", track.track_id])
+    if debug:
+        cmd.append("--debug")
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        lib.debug_log("fetch_spawned", cmd)
+    except Exception as exc:
+        lib.debug_log("fetch_spawn_failed", exc)
+
+
+def stream_sptlrx(track: lib.TrackInfo) -> int:
+    if not shutil.which("sptlrx"):
+        lib.render_message(
+            "sptlrx missing",
+            [
+                "Instale `sptlrx` para ver letras sincronizadas.",
+                "O fetch automático continua em background.",
+            ],
+        )
+        return 0
+
+    lib.debug_log("sptlrx", "starting pipe")
+    proc = subprocess.Popen(
+        ["sptlrx", "pipe"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        stream_sptlrx_lines(proc, track)
+        return 0
+    finally:
+        lib.terminate_process(proc)
+
+
+def stream_sptlrx_lines(proc: subprocess.Popen[str], track: lib.TrackInfo) -> None:
+    if proc.stdout is None:
+        return
+    last_line = ""
+    last_status = ""
+    while True:
+        status = lib.spotify_status()
+        if status != "playing":
+            break
+
+        fresh = lib.get_track_info()
+        if not fresh or lib.normalize_text(f"{fresh.artist} - {fresh.title}") != lib.normalize_text(f"{track.artist} - {track.title}"):
+            break
+
+        line = read_line(proc, timeout=0.4)
+        if line is None:
+            if proc.poll() is not None:
+                break
+            if status != last_status:
+                lib.debug_log("sptlrx_status", status)
+                last_status = status
+            continue
+
+        text = line.strip()
+        if not lib.is_useful_lyric_line(text) or text == last_line:
+            continue
+        lib.render_single_line(text)
+        last_line = text
+
+
+def read_line(proc: subprocess.Popen[str], timeout: float) -> str | None:
+    if proc.stdout is None:
+        return None
+    try:
+        import select
+
+        readable, _, _ = select.select([proc.stdout], [], [], timeout)
+        if not readable:
+            return None
+        line = proc.stdout.readline()
+        if line == "":
+            return None
+        return line
+    except Exception:
+        return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
