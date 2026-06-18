@@ -6,7 +6,7 @@ Status:
 Resolvido.
 
 Descrição:
-Quando a faixa muda em uma playlist, o comando principal agora reavalia a faixa atual e reinicia o fluxo adequado para a próxima música, sem encerrar o processo enquanto o Spotify continua tocando.
+Quando a faixa muda em uma playlist, o comando principal reavalia a faixa atual, emite `track_changed`, limpa a tela e reinicia o pipeline para a nova música. Se o `sptlrx` ficar mudo por 3s, o fluxo entra em espera e continua checando se um `.lrc` apareceu no cache local.
 
 Prioridade:
 Alta.
