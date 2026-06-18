@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 lyrics_map.json
 sptlrx-config.yaml
+
+.obsidian/
+__pycache__/
+*.pyc
