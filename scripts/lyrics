@@ -23,14 +23,15 @@ EXIT_TRACK_CHANGED = 3
 
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--kitty", action="store_true")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--no-output-timeout", type=float, default=DEFAULT_NO_OUTPUT_SECONDS)
     args = parser.parse_args()
 
-    if args.run:
-        return run_terminal(debug=args.debug, no_output_timeout=args.no_output_timeout)
-    return launch_kitty(debug=args.debug, no_output_timeout=args.no_output_timeout)
+    if args.kitty:
+        return launch_kitty(debug=args.debug, no_output_timeout=args.no_output_timeout)
+    return run_terminal(debug=args.debug, no_output_timeout=args.no_output_timeout)
 
 
 def launch_kitty(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTPUT_SECONDS) -> int:

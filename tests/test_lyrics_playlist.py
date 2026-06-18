@@ -138,6 +138,38 @@ class LyricsPlaylistTest(unittest.TestCase):
 
         self.assertEqual(flags, ["--debug", "--run", "--no-output-timeout", "15"])
 
+    def test_main_defaults_to_current_terminal(self) -> None:
+        module = load_script_module()
+        calls: list[tuple[str, bool, float]] = []
+
+        module.run_terminal = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("run", debug, no_output_timeout)) or 0
+        module.launch_kitty = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("kitty", debug, no_output_timeout)) or 0
+        original_argv = module.sys.argv
+        module.sys.argv = ["lyrics", "--debug"]
+        try:
+            result = module.main()
+        finally:
+            module.sys.argv = original_argv
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [("run", True, module.DEFAULT_NO_OUTPUT_SECONDS)])
+
+    def test_main_routes_to_kitty_when_requested(self) -> None:
+        module = load_script_module()
+        calls: list[tuple[str, bool, float]] = []
+
+        module.run_terminal = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("run", debug, no_output_timeout)) or 0
+        module.launch_kitty = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("kitty", debug, no_output_timeout)) or 0
+        original_argv = module.sys.argv
+        module.sys.argv = ["lyrics", "--kitty", "--debug"]
+        try:
+            result = module.main()
+        finally:
+            module.sys.argv = original_argv
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [("kitty", True, module.DEFAULT_NO_OUTPUT_SECONDS)])
+
     def test_stream_no_output_renders_wait_message(self) -> None:
         module = load_script_module()
         track = types.SimpleNamespace(artist="Artist", title="Silent Song", album="", duration_ms=180000, track_id="1")
