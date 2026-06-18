@@ -2,11 +2,24 @@
 
 Sistema de letras sincronizadas para Spotify no Linux.
 
+## Instalação
+
+1. Garanta estas dependências no sistema: `go`, `python3`, `playerctl`, `kitty`, `sptlrx`.
+2. Execute `./install.sh` na raiz do projeto.
+3. O script compila `lyrics-fetch-go` e instala os binários em `~/.local/bin/`.
+
 ## Comandos
 
 - `lyrics`: comando principal.
 - `lyrics-local`: usa `.lrc` local sincronizado.
 - `lyrics-fetch-go`: busca `.lrc` em providers externos e salva localmente.
+
+## Uso
+
+- `lyrics`: abre o fluxo normal em uma janela do Kitty.
+- `lyrics --debug --run`: executa o fluxo no terminal atual com logs de debug.
+- `lyrics-local --debug --run`: roda diretamente o renderer de `.lrc` local.
+- `lyrics-fetch-go --debug`: busca e salva a letra sincronizada do Spotify atual.
 
 ## Fluxo
 
