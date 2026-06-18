@@ -2,6 +2,14 @@
 
 Sistema de letras sincronizadas para Spotify no Linux.
 
+## Demonstração
+
+![Demo](assets/demo.gif)
+
+Versão em vídeo: [demo.mp4](assets/demo.mp4)
+
+![Screenshot](assets/screenshot.png)
+
 ## Instalação
 
 1. Garanta estas dependências no sistema: `go`, `python3`, `playerctl`, `kitty`, `sptlrx`.
