@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import shlex
 import shutil
 import subprocess
 import sys
@@ -24,14 +23,17 @@ EXIT_TRACK_CHANGED = 3
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--kitty", action="store_true")
+    parser.add_argument("--current", action="store_true")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--no-output-timeout", type=float, default=DEFAULT_NO_OUTPUT_SECONDS)
     args = parser.parse_args()
 
+    if args.current or args.run:
+        return run_terminal(debug=args.debug, no_output_timeout=args.no_output_timeout)
     if args.kitty:
         return launch_kitty(debug=args.debug, no_output_timeout=args.no_output_timeout)
-    return run_terminal(debug=args.debug, no_output_timeout=args.no_output_timeout)
+    return launch_kitty(debug=args.debug, no_output_timeout=args.no_output_timeout)
 
 
 def launch_kitty(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTPUT_SECONDS) -> int:
@@ -45,15 +47,18 @@ def launch_kitty(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTP
     cmd = [
         "kitty",
         "--detach",
+        "--class",
+        "lyrics-terminal",
+        "--title",
+        "Lyrics",
         "--override",
         f"font_family={lib.FONT_FAMILY}",
         "--override",
         f"font_size={lib.FONT_SIZE}",
-        "--title",
-        "Lyrics",
-        "bash",
-        "-lc",
-        f"{shlex.quote(str(SCRIPT))} {' '.join(shlex.quote(flag) for flag in runtime_flags(debug, no_output_timeout))}",
+        "-e",
+        "python3",
+        str(SCRIPT),
+        *runtime_flags(debug, no_output_timeout),
     ]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return 0

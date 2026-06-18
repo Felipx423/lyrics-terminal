@@ -138,7 +138,7 @@ class LyricsPlaylistTest(unittest.TestCase):
 
         self.assertEqual(flags, ["--debug", "--run", "--no-output-timeout", "15"])
 
-    def test_main_defaults_to_current_terminal(self) -> None:
+    def test_main_defaults_to_kitty(self) -> None:
         module = load_script_module()
         calls: list[tuple[str, bool, float]] = []
 
@@ -146,6 +146,22 @@ class LyricsPlaylistTest(unittest.TestCase):
         module.launch_kitty = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("kitty", debug, no_output_timeout)) or 0
         original_argv = module.sys.argv
         module.sys.argv = ["lyrics", "--debug"]
+        try:
+            result = module.main()
+        finally:
+            module.sys.argv = original_argv
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [("kitty", True, module.DEFAULT_NO_OUTPUT_SECONDS)])
+
+    def test_main_routes_to_current_terminal_when_requested(self) -> None:
+        module = load_script_module()
+        calls: list[tuple[str, bool, float]] = []
+
+        module.run_terminal = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("run", debug, no_output_timeout)) or 0
+        module.launch_kitty = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("kitty", debug, no_output_timeout)) or 0
+        original_argv = module.sys.argv
+        module.sys.argv = ["lyrics", "--current", "--debug"]
         try:
             result = module.main()
         finally:
@@ -169,6 +185,36 @@ class LyricsPlaylistTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(calls, [("kitty", True, module.DEFAULT_NO_OUTPUT_SECONDS)])
+
+    def test_launch_kitty_uses_direct_exec(self) -> None:
+        module = load_script_module()
+        popen_calls = []
+        which_calls = []
+
+        module.shutil.which = lambda name: which_calls.append(name) or f"/usr/bin/{name}"
+        module.subprocess.Popen = lambda cmd, stdout=None, stderr=None: popen_calls.append(cmd) or types.SimpleNamespace()
+
+        result = module.launch_kitty(debug=True, no_output_timeout=15.0)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(which_calls, ["kitty", "playerctl", "python3"])
+        self.assertEqual(popen_calls[0][:8], [
+            "kitty",
+            "--detach",
+            "--class",
+            "lyrics-terminal",
+            "--title",
+            "Lyrics",
+            "--override",
+            "font_family=Monocraft",
+        ])
+        self.assertIn("-e", popen_calls[0])
+        self.assertNotIn("bash", popen_calls[0])
+        self.assertNotIn("-lc", popen_calls[0])
+        self.assertIn("python3", popen_calls[0])
+        self.assertIn("--run", popen_calls[0])
+        self.assertIn("--debug", popen_calls[0])
+        self.assertIn("--no-output-timeout", popen_calls[0])
 
     def test_stream_no_output_renders_wait_message(self) -> None:
         module = load_script_module()

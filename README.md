@@ -16,13 +16,17 @@ Sistema de letras sincronizadas para Spotify no Linux.
 
 ## Uso
 
-- `lyrics`: executa o fluxo no terminal atual.
+- `lyrics`: abre uma janela Kitty dedicada com Monocraft 32.
+- `lyrics --current`: executa o fluxo no terminal atual.
 - `lyrics --kitty`: abre uma nova janela do Kitty.
 - `lyrics --run`: mantém compatibilidade e executa no terminal atual.
-- `lyrics --debug`: executa no terminal atual com logs de debug.
+- `lyrics --debug`: abre Kitty com logs de debug.
+- `lyrics --current --debug`: executa no terminal atual com logs de debug.
 - `lyrics --kitty --debug`: abre Kitty com logs de debug.
 - `lyrics-local --debug --run`: roda diretamente o renderer de `.lrc` local.
 - `lyrics-fetch-go --debug`: busca e salva a letra sincronizada do Spotify atual.
+
+No modo `--current`, a fonte e o tamanho passam a ser controlados pelo terminal atual.
 
 ## Fluxo
 
