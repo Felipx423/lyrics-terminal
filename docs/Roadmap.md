@@ -2,7 +2,7 @@
 
 ## Próximos passos
 
-1. Corrigir suporte a playlists.
+1. [x] Corrigir suporte a playlists.
 2. Melhorar logs de debug.
 3. Criar modo fast no lyrics-fetch-go.
 4. Melhorar README.

@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import lyricslib as lib
@@ -14,6 +15,7 @@ import lyricslib as lib
 
 SCRIPT = Path(__file__).resolve()
 FETCH_GO_SCRIPT = SCRIPT.with_name("lyrics-fetch-go")
+POLL_INTERVAL_SECONDS = 0.20
 
 
 def main() -> int:
@@ -68,32 +70,43 @@ def run_terminal(debug: bool = False) -> int:
             lib.render_message("Dependencies missing", ["Instale:", *[f"- {name}" for name in missing]])
             return 1
 
-        status = lib.spotify_status()
-        lib.debug_log("spotify_status", status or "unknown")
-        if status != "playing":
-            lib.render_message(
-                "Spotify not playing",
-                [
-                    "Abra o Spotify e inicie uma música.",
-                    "Depois rode `lyrics` de novo.",
-                ],
-            )
-            return 0
+        started = False
+        while True:
+            status = lib.spotify_status()
+            lib.debug_log("spotify_status", status or "unknown")
+            if status != "playing":
+                if not started:
+                    lib.render_message(
+                        "Spotify not playing",
+                        [
+                            "Abra o Spotify e inicie uma música.",
+                            "Depois rode `lyrics` de novo.",
+                        ],
+                    )
+                else:
+                    lib.debug_log("playback", "stopped")
+                return 0
 
-        track = lib.get_track_info()
-        if not track:
-            lib.render_message("No track metadata", ["Não consegui ler os metadados do Spotify."])
-            return 1
+            track = lib.get_track_info()
+            if not track:
+                lib.render_message("No track metadata", ["Não consegui ler os metadados do Spotify."])
+                return 1
 
-        lib.debug_log("track", f"{track.artist} - {track.title}")
-        local_path = lib.find_local_lrc(track)
-        lib.debug_log("local_lrc", str(local_path) if local_path else "missing")
+            started = True
+            lib.debug_log("track", f"{track.artist} - {track.title}")
+            local_path = lib.find_local_lrc(track)
+            lib.debug_log("local_lrc", str(local_path) if local_path else "missing")
 
-        if local_path:
-            return exec_lyrics_local(debug=debug)
+            if local_path:
+                exit_code = exec_lyrics_local(debug=debug)
+            else:
+                spawn_background_fetch(track, debug=debug)
+                exit_code = stream_sptlrx(track)
 
-        spawn_background_fetch(track, debug=debug)
-        return stream_sptlrx(track)
+            if exit_code != 0:
+                return exit_code
+
+            time.sleep(POLL_INTERVAL_SECONDS)
     finally:
         lib.restore_terminal()
 
