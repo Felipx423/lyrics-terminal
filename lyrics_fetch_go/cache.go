@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,11 +13,12 @@ import (
 )
 
 var (
-	homeDir   = mustHomeDir()
-	localDir  = filepath.Join(homeDir, ".local", "share", "lyrics")
-	cacheDir  = filepath.Join(homeDir, ".cache", "lyrics-terminal")
-	indexPath = filepath.Join(cacheDir, "index.json")
-	mapPaths  = []string{filepath.Join(homeDir, "Music", "lyrics", "lyrics_map.json"), filepath.Join(homeDir, ".config", "spicetify", "CustomApps", "lyrics-plus", "lyrics_map.json")}
+	homeDir        = mustHomeDir()
+	localDir       = filepath.Join(homeDir, ".local", "share", "lyrics")
+	cacheDir       = filepath.Join(homeDir, ".cache", "lyrics-terminal")
+	indexPath      = filepath.Join(cacheDir, "index.json")
+	failureLogPath = filepath.Join(cacheDir, "failures.jsonl")
+	mapPaths       = []string{filepath.Join(homeDir, "Music", "lyrics", "lyrics_map.json"), filepath.Join(homeDir, ".config", "spicetify", "CustomApps", "lyrics-plus", "lyrics_map.json")}
 )
 
 func mustHomeDir() string {
@@ -56,6 +58,105 @@ func saveIndex(index map[string]IndexEntry) error {
 		return err
 	}
 	return os.Rename(tmp, indexPath)
+}
+
+func appendFailureEvent(event FailureEvent) error {
+	if err := ensureDir(cacheDir); err != nil {
+		return err
+	}
+	event.CreatedAt = time.Now().Unix()
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(failureLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadFailureEvents() []FailureEvent {
+	f, err := os.Open(failureLogPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	events := make([]FailureEvent, 0, 64)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var event FailureEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func recordFailureEvent(event FailureEvent) error {
+	if event.Artist == "" && event.Title == "" && event.Provider == "" && event.Category == "" {
+		return nil
+	}
+	return appendFailureEvent(event)
+}
+
+func failureCategoryFromReason(reason string) string {
+	switch {
+	case reason == "":
+		return "outros"
+	case strings.Contains(reason, "timeout"):
+		return "timeout"
+	case strings.Contains(reason, "duration"):
+		return "mismatch de duração"
+	case strings.Contains(reason, "artist"):
+		return "mismatch de artista"
+	case strings.Contains(reason, "title"):
+		return "mismatch de título"
+	case strings.Contains(reason, "not synced"):
+		return "resultado não sincronizado"
+	case strings.Contains(reason, "cjk") || strings.Contains(reason, "empty") || strings.Contains(reason, "no_timestamp") || strings.Contains(reason, "no_usable_lyric_lines"):
+		return "cache inválido"
+	case strings.Contains(reason, "status") || strings.Contains(reason, "command not found") || strings.Contains(reason, "curl") || strings.Contains(reason, "network") || strings.Contains(reason, "connect"):
+		return "provider indisponível"
+	case strings.Contains(reason, "not found"):
+		return "letra inexistente"
+	default:
+		return "outros"
+	}
+}
+
+func classifyFailureEvent(event FailureEvent) string {
+	if event.Category != "" {
+		return event.Category
+	}
+	if event.Status == "timeout" {
+		return "timeout"
+	}
+	if event.Reason != "" {
+		category := failureCategoryFromReason(strings.ToLower(event.Reason))
+		if category != "outros" {
+			return category
+		}
+	}
+	if event.Status == "invalid" {
+		return "cache inválido"
+	}
+	if event.Status == "not_found" {
+		return "letra inexistente"
+	}
+	if event.Provider == "pipeline" && event.Status == "not_found" {
+		return "letra inexistente"
+	}
+	return "outros"
 }
 
 func upsertIndexEntry(track Track, patch IndexEntry) error {

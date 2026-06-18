@@ -17,11 +17,13 @@ const (
 )
 
 var (
-	fetchLyricsFn         = fetchLyrics
-	findLocalLRCFn        = findLocalLRC
-	saveLocalLyricsFn     = saveLocalLyrics
-	recordSearchOutcomeFn = recordSearchOutcome
-	printStatsFn          = printStats
+	fetchLyricsFn          = fetchLyrics
+	findLocalLRCFn         = findLocalLRC
+	saveLocalLyricsFn      = saveLocalLyrics
+	recordSearchOutcomeFn  = recordSearchOutcome
+	recordFailureEventFn   = recordFailureEvent
+	printStatsFn           = printStats
+	printFailureAnalysisFn = printFailureAnalysis
 )
 
 func main() {
@@ -34,6 +36,7 @@ func run(args []string) int {
 	debug := fs.Bool("debug", false, "enable debug logging")
 	clearCache := fs.Bool("clear-cache", false, "remove cache directory")
 	statsMode := fs.Bool("stats", false, "show provider and cache statistics")
+	analyzeFailures := fs.Bool("analyze-failures", false, "analyze cached failure causes")
 	dryRun := fs.Bool("dry-run", false, "fetch candidates without saving cache")
 	noSpotify := fs.Bool("no-spotify", false, "use provided artist/title without playerctl")
 	ignoreLocalCache := fs.Bool("ignore-local-cache", false, "skip local cache shortcut")
@@ -56,6 +59,13 @@ func run(args []string) int {
 	}
 	if *statsMode {
 		if err := printStatsFn(os.Stdout, loadIndex()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if *analyzeFailures {
+		if err := printFailureAnalysisFn(os.Stdout, loadIndex(), loadFailureEvents(), localDir, cacheDir); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -94,6 +104,19 @@ func run(args []string) int {
 				if recErr := recordSearchOutcomeFn(track, "not_found", "", "", "", nil); recErr != nil {
 					debugLog(*debug, "index_error", recErr)
 				}
+				if failErr := recordFailureEventFn(FailureEvent{
+					Artist:     track.Artist,
+					Title:      track.Title,
+					Provider:   "pipeline",
+					Category:   "letra inexistente",
+					Reason:     "no provider returned synced lyrics",
+					Status:     "not_found",
+					TrackID:    track.TrackID,
+					DurationMs: track.DurationMs,
+					Source:     "pipeline",
+				}); failErr != nil {
+					debugLog(*debug, "failure_log_error", failErr)
+				}
 			}
 			fmt.Fprintln(os.Stderr, "result: not found")
 			return 0
@@ -103,6 +126,19 @@ func run(args []string) int {
 			if !*dryRun {
 				if recErr := recordSearchOutcomeFn(track, "timeout", "", "", "", nil); recErr != nil {
 					debugLog(*debug, "index_error", recErr)
+				}
+				if failErr := recordFailureEventFn(FailureEvent{
+					Artist:     track.Artist,
+					Title:      track.Title,
+					Provider:   "pipeline",
+					Category:   "timeout",
+					Reason:     "global timeout reached",
+					Status:     "timeout",
+					TrackID:    track.TrackID,
+					DurationMs: track.DurationMs,
+					Source:     "pipeline",
+				}); failErr != nil {
+					debugLog(*debug, "failure_log_error", failErr)
 				}
 			}
 			fmt.Fprintln(os.Stderr, "result: not found")

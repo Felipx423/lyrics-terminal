@@ -68,8 +68,10 @@ func fetchLyrics(ctx context.Context, track Track, debug bool, deepSearch bool) 
 	} else if err != nil && !errors.Is(err, errNotFound) {
 		if errors.Is(err, errTimeout) {
 			debugLog(debug, "lrclib", "timeout, not caching negative result")
+			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: "timeout", Reason: "lrclib timeout", Status: "timeout", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 		} else {
 			debugLog(debug, "lrclib_error", err)
+			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: "provider indisponível", Reason: err.Error(), Status: "error", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 		}
 	}
 
@@ -77,18 +79,21 @@ func fetchLyrics(ctx context.Context, track Track, debug bool, deepSearch bool) 
 		return cand, nil
 	} else if err != nil && !errors.Is(err, errNotFound) {
 		debugLog(debug, "netease_map_error", err)
+		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "netease-map", Category: failureCategoryFromReason(strings.ToLower(err.Error())), Reason: err.Error(), Status: "error", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 	}
 
 	if cand, err := fetchNetEaseSearch(ctx, track, debug); err == nil && cand != nil {
 		return cand, nil
 	} else if err != nil && !errors.Is(err, errNotFound) {
 		debugLog(debug, "netease_search_error", err)
+		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "netease-search", Category: failureCategoryFromReason(strings.ToLower(err.Error())), Reason: err.Error(), Status: "error", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 	}
 
 	if cand, err := fetchSyncedLyricsCLI(ctx, track, debug, deepSearch); err == nil && cand != nil {
 		return cand, nil
 	} else if err != nil && !errors.Is(err, errNotFound) {
 		debugLog(debug, "syncedlyrics_error", err)
+		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: failureCategoryFromReason(strings.ToLower(err.Error())), Reason: err.Error(), Status: "error", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 	}
 
 	return nil, errNotFound
@@ -121,6 +126,7 @@ func fetchLRCLIB(ctx context.Context, track Track, debug bool, deepSearch bool) 
 		}
 		debugLog(debug, "lrclib_candidates", summarizeLRCLIBCandidates(candidates))
 		for _, cand := range candidates {
+			sourceID := candidateSourceID(cand.ID)
 			accepted, reason, details := validateLRCLIBCandidate(cand, track)
 			debugLog(debug, "lrclib_candidate", map[string]any{
 				"track":           cand.TrackName,
@@ -135,13 +141,14 @@ func fetchLRCLIB(ctx context.Context, track Track, debug bool, deepSearch bool) 
 				"reason":          reason,
 			})
 			if !accepted {
+				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: failureCategoryFromReason(strings.ToLower(reason)), Reason: reason, Status: "invalid", SourceID: sourceID, TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 				continue
 			}
 			text := candText(cand)
 			if text == "" || !hasSyncedLines(text) {
+				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: "resultado não sincronizado", Reason: "lrclib candidate without synced lines", Status: "invalid", SourceID: sourceID, TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 				continue
 			}
-			sourceID := candidateSourceID(cand.ID)
 			return &Candidate{Text: text, Provider: "lrclib", SourceID: sourceID}, nil
 		}
 	}
@@ -330,6 +337,7 @@ func fetchNetEaseLyric(track Track, neteaseID int64, provider string, debug bool
 	lrc := parsed.LRC.Lyric
 	if strings.TrimSpace(lrc) == "" {
 		debugLog(debug, "netease_lyric", fmt.Sprintf("%d no lrc", neteaseID))
+		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: provider, Category: "letra inexistente", Reason: "netease returned empty lyric", Status: "not_found", SourceID: strconv.FormatInt(neteaseID, 10), TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 		return nil, errNotFound
 	}
 	candidateTitle := track.Title
@@ -352,6 +360,7 @@ func fetchNetEaseLyric(track Track, neteaseID int64, provider string, debug bool
 		"duration_diff": details["duration_diff"],
 	})
 	if !accepted {
+		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: provider, Category: failureCategoryFromReason(strings.ToLower(reason)), Reason: reason, Status: "invalid", SourceID: strconv.FormatInt(neteaseID, 10), TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 		return nil, errNotFound
 	}
 	return &Candidate{Text: lrc, Provider: provider, SourceID: strconv.FormatInt(neteaseID, 10)}, nil
@@ -381,18 +390,27 @@ func fetchSyncedLyricsCLI(ctx context.Context, track Track, debug bool, deepSear
 		if runErr != nil {
 			if subctx.Err() == context.DeadlineExceeded {
 				debugLog(debug, "syncedlyrics_timeout", attempt)
+				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: "timeout", Reason: "syncedlyrics timeout", Status: "timeout", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 				return nil, errTimeout
 			}
 			debugLog(debug, "syncedlyrics_exit", runErr)
+			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: "provider indisponível", Reason: runErr.Error(), Status: "error", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 			continue
 		}
 		text := strings.TrimSpace(string(out))
 		if text == "" {
+			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: "letra inexistente", Reason: "syncedlyrics returned empty output", Status: "not_found", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 			continue
 		}
 		accepted, reason, _ := validateGenericCandidate(track.Title, track.Artist, "", text, track, track.DurationMs)
 		debugLog(debug, "syncedlyrics_candidate", map[string]any{"accepted": accepted, "reason": reason})
 		if !accepted || !hasSyncedLines(text) {
+			category := failureCategoryFromReason(strings.ToLower(reason))
+			if !hasSyncedLines(text) {
+				category = "resultado não sincronizado"
+				reason = "syncedlyrics output without timestamps"
+			}
+			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: category, Reason: reason, Status: "invalid", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 			continue
 		}
 		return &Candidate{Text: text, Provider: "syncedlyrics"}, nil

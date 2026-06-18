@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"testing"
 )
 
@@ -81,5 +82,26 @@ func TestRunDryRunDoesNotSaveOrRecord(t *testing.T) {
 	}
 	if calledRecord {
 		t.Fatalf("dry-run should not record search outcome")
+	}
+}
+
+func TestRunAnalyzeFailuresInvokesReport(t *testing.T) {
+	origPrint := printFailureAnalysisFn
+	defer func() {
+		printFailureAnalysisFn = origPrint
+	}()
+
+	called := false
+	printFailureAnalysisFn = func(w io.Writer, index map[string]IndexEntry, logEvents []FailureEvent, localRoot, cacheRoot string) error {
+		called = true
+		return nil
+	}
+
+	exitCode := run([]string{"--analyze-failures"})
+	if exitCode != 0 {
+		t.Fatalf("unexpected exit code %d", exitCode)
+	}
+	if !called {
+		t.Fatalf("expected failure analysis printer to be called")
 	}
 }
