@@ -70,6 +70,10 @@ def run_terminal(debug: bool = False) -> int:
             lib.render_message("Dependencies missing", ["Instale:", *[f"- {name}" for name in missing]])
             return 1
 
+        last_track_key: str | None = None
+        last_track_label = ""
+        fetch_spawned_for_key: str | None = None
+
         started = False
         while True:
             status = lib.spotify_status()
@@ -93,19 +97,74 @@ def run_terminal(debug: bool = False) -> int:
                 return 1
 
             started = True
-            lib.debug_log("track", f"{track.artist} - {track.title}")
+            current_key = track_signature(track)
+            current_label = track_label(track)
+
+            if last_track_key and current_key != last_track_key:
+                lib.clear_screen()
+                lib.debug_log("track_changed", f"{last_track_label} -> {current_label}")
+                lib.debug_log("pipeline_restart", "restarting_pipeline")
+                fetch_spawned_for_key = None
+
+            lib.debug_log("pipeline_start", "starting")
+            lib.debug_log("current_track", current_label)
+
             local_path = lib.find_local_lrc(track)
-            lib.debug_log("local_lrc", str(local_path) if local_path else "missing")
+            if local_path:
+                lib.debug_log("local_lrc", f"found {local_path}")
+            else:
+                lib.debug_log("local_lrc", "missing")
 
             if local_path:
+                last_track_key = current_key
+                last_track_label = current_label
                 exit_code = exec_lyrics_local(debug=debug)
             else:
-                spawn_background_fetch(track, debug=debug)
-                exit_code = stream_sptlrx(track)
+                if fetch_spawned_for_key != current_key:
+                    if spawn_background_fetch(track, debug=debug) is not None:
+                        fetch_spawned_for_key = current_key
+                lib.debug_log("sptlrx_start", current_label)
+                stream_status, next_track = stream_sptlrx(track)
 
-            if exit_code != 0:
-                return exit_code
+                if stream_status == "track_changed":
+                    lib.clear_screen()
+                    next_label = track_label(next_track) if next_track else "unknown"
+                    lib.debug_log("track_changed", f"{current_label} -> {next_label}")
+                    lib.debug_log("pipeline_restart", "restarting_pipeline")
+                    last_track_key = track_signature(next_track) if next_track else None
+                    last_track_label = next_label
+                    fetch_spawned_for_key = None
+                    continue
 
+                if stream_status == "no_output":
+                    wait_status, wait_track = wait_for_local_lrc_or_track_change(track)
+                    if wait_status == "track_changed":
+                        lib.clear_screen()
+                        next_label = track_label(wait_track) if wait_track else "unknown"
+                        lib.debug_log("track_changed", f"{current_label} -> {next_label}")
+                        lib.debug_log("pipeline_restart", "restarting_pipeline")
+                        last_track_key = track_signature(wait_track) if wait_track else None
+                        last_track_label = next_label
+                        fetch_spawned_for_key = None
+                        continue
+                    if wait_status == "local_ready":
+                        lib.clear_screen()
+                        lib.debug_log("pipeline_restart", "restarting_pipeline")
+                        continue
+                    if wait_status == "stopped":
+                        return 0
+                    return 1
+
+                if stream_status == "stopped":
+                    lib.debug_log("pipeline_restart", "restarting_pipeline")
+                    last_track_key = current_key
+                    last_track_label = current_label
+                    continue
+
+                return 1
+
+            last_track_key = current_key
+            last_track_label = current_label
             time.sleep(POLL_INTERVAL_SECONDS)
     finally:
         lib.restore_terminal()
@@ -120,10 +179,18 @@ def exec_lyrics_local(debug: bool = False) -> int:
     return subprocess.call(cmd)
 
 
-def spawn_background_fetch(track: lib.TrackInfo, debug: bool = False) -> None:
+def track_label(track: lib.TrackInfo) -> str:
+    return f"{track.artist} - {track.title}"
+
+
+def track_signature(track: lib.TrackInfo) -> str:
+    return lib.normalize_text(track_label(track))
+
+
+def spawn_background_fetch(track: lib.TrackInfo, debug: bool = False) -> int | None:
     if not FETCH_GO_SCRIPT.exists():
         lib.debug_log("fetch_spawn_failed", "lyrics-fetch-go missing")
-        return
+        return None
     cmd = [str(FETCH_GO_SCRIPT), "--no-spotify", "--artist", track.artist, "--title", track.title]
     if track.album:
         cmd.extend(["--album", track.album])
@@ -134,13 +201,15 @@ def spawn_background_fetch(track: lib.TrackInfo, debug: bool = False) -> None:
     if debug:
         cmd.append("--debug")
     try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        lib.debug_log("fetch_spawned", cmd)
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        lib.debug_log("fetch_spawned", f"pid={proc.pid} cmd={cmd}")
+        return proc.pid
     except Exception as exc:
         lib.debug_log("fetch_spawn_failed", exc)
+        return None
 
 
-def stream_sptlrx(track: lib.TrackInfo) -> int:
+def stream_sptlrx(track: lib.TrackInfo) -> tuple[str, lib.TrackInfo | None]:
     if not shutil.which("sptlrx"):
         lib.render_message(
             "sptlrx missing",
@@ -149,9 +218,9 @@ def stream_sptlrx(track: lib.TrackInfo) -> int:
                 "O fetch automático continua em background.",
             ],
         )
-        return 0
+        return "no_output", None
 
-    lib.debug_log("sptlrx", "starting pipe")
+    lib.debug_log("sptlrx_start", track_label(track))
     proc = subprocess.Popen(
         ["sptlrx", "pipe"],
         stdout=subprocess.PIPE,
@@ -160,33 +229,54 @@ def stream_sptlrx(track: lib.TrackInfo) -> int:
         bufsize=1,
     )
     try:
-        stream_sptlrx_lines(proc, track)
-        return 0
+        return stream_sptlrx_lines(proc, track)
     finally:
         lib.terminate_process(proc)
 
 
-def stream_sptlrx_lines(proc: subprocess.Popen[str], track: lib.TrackInfo) -> None:
+def stream_sptlrx_lines(proc: subprocess.Popen[str], track: lib.TrackInfo) -> tuple[str, lib.TrackInfo | None]:
     if proc.stdout is None:
-        return
+        return "no_output", None
     last_line = ""
     last_status = ""
+    start_at = time.monotonic()
+    output_seen = False
     while True:
         status = lib.spotify_status()
         if status != "playing":
-            break
+            return "stopped", None
 
         fresh = lib.get_track_info()
-        if not fresh or lib.normalize_text(f"{fresh.artist} - {fresh.title}") != lib.normalize_text(f"{track.artist} - {track.title}"):
-            break
+        if not fresh:
+            return "stopped", None
+        if track_signature(fresh) != track_signature(track):
+            return "track_changed", fresh
 
         line = read_line(proc, timeout=0.4)
         if line is None:
             if proc.poll() is not None:
-                break
+                if output_seen:
+                    return "stopped", None
+                lib.render_message(
+                    "Buscando letra...",
+                    [
+                        "Aguardando sptlrx ou cache local.",
+                    ],
+                )
+                lib.debug_log("sptlrx_no_output", "proc_exited_without_output")
+                return "no_output", None
             if status != last_status:
                 lib.debug_log("sptlrx_status", status)
                 last_status = status
+            if not output_seen and time.monotonic() - start_at >= 3.0:
+                lib.render_message(
+                    "Buscando letra...",
+                    [
+                        "Aguardando sptlrx ou cache local.",
+                    ],
+                )
+                lib.debug_log("sptlrx_no_output", "3s_without_output")
+                return "no_output", None
             continue
 
         text = line.strip()
@@ -194,6 +284,27 @@ def stream_sptlrx_lines(proc: subprocess.Popen[str], track: lib.TrackInfo) -> No
             continue
         lib.render_single_line(text)
         last_line = text
+        output_seen = True
+        start_at = time.monotonic()
+
+
+def wait_for_local_lrc_or_track_change(track: lib.TrackInfo) -> tuple[str, lib.TrackInfo | None]:
+    while True:
+        status = lib.spotify_status()
+        if status != "playing":
+            return "stopped", None
+
+        fresh = lib.get_track_info()
+        if not fresh:
+            return "stopped", None
+
+        if track_signature(fresh) != track_signature(track):
+            return "track_changed", fresh
+
+        if lib.find_local_lrc(track):
+            return "local_ready", fresh
+
+        time.sleep(POLL_INTERVAL_SECONDS)
 
 
 def read_line(proc: subprocess.Popen[str], timeout: float) -> str | None:
