@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -27,13 +28,98 @@ def main() -> int:
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--no-output-timeout", type=float, default=DEFAULT_NO_OUTPUT_SECONDS)
+    parser.add_argument("--health", action="store_true")
+    parser.add_argument("--version", action="store_true")
     args = parser.parse_args()
+
+    if args.version:
+        return print_version()
+    if args.health:
+        return run_health_check()
+
+    mode = "current" if args.current or args.run else "kitty"
+    lib.log_event("startup", {"script": "lyrics", "mode": mode, "debug": args.debug})
 
     if args.current or args.run:
         return run_terminal(debug=args.debug, no_output_timeout=args.no_output_timeout)
     if args.kitty:
         return launch_kitty(debug=args.debug, no_output_timeout=args.no_output_timeout)
     return launch_kitty(debug=args.debug, no_output_timeout=args.no_output_timeout)
+
+
+def print_version() -> int:
+    version, commit, build_date = lib.version_info()
+    print(f"version: {version}")
+    print(f"commit: {commit}")
+    print(f"build_date: {build_date}")
+    return 0
+
+
+def run_health_check() -> int:
+    checks = [
+        check_command("spotify", "playerctl"),
+        check_command("playerctl", "playerctl"),
+        check_command("kitty", "kitty"),
+        check_command("sptlrx", "sptlrx"),
+        check_command("lyrics-fetch-go", "lyrics-fetch-go"),
+        check_cache_dir(),
+        check_local_dir(),
+        check_index_file(),
+    ]
+    exit_code = 0
+    for status, label, detail in checks:
+        print(f"{status} {label}: {detail}")
+        if status == "FAIL":
+            exit_code = 1
+    return exit_code
+
+
+def check_command(label: str, command: str) -> tuple[str, str, str]:
+    path = shutil.which(command)
+    if not path:
+        return "FAIL", label, "not found in PATH"
+    if label == "spotify":
+        try:
+            out = subprocess.run(
+                ["playerctl", "-p", "spotify", "status"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=2.0,
+                check=True,
+            )
+            status = out.stdout.strip().lower() or "unknown"
+            if status in {"playing", "paused", "stopped"}:
+                return "PASS", label, f"status={status}"
+            return "WARN", label, f"unexpected status={status}"
+        except Exception as exc:
+            return "WARN", label, f"unavailable: {exc}"
+    return "PASS", label, path
+
+
+def check_cache_dir() -> tuple[str, str, str]:
+    path = lib.CACHE_DIR
+    if path.exists():
+        return "PASS", "cache directory", str(path)
+    return "FAIL", "cache directory", str(path)
+
+
+def check_local_dir() -> tuple[str, str, str]:
+    path = lib.LOCAL_DIR
+    if path.exists():
+        return "PASS", "local lyrics directory", str(path)
+    return "WARN", "local lyrics directory", str(path)
+
+
+def check_index_file() -> tuple[str, str, str]:
+    path = lib.INDEX_PATH
+    if not path.exists():
+        return "WARN", "index.json", "missing"
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return "FAIL", "index.json", f"invalid json: {exc}"
+    return "PASS", "index.json", str(path)
 
 
 def launch_kitty(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTPUT_SECONDS) -> int:
@@ -123,6 +209,7 @@ def run_terminal(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTP
             started = True
             current_key = track_signature(track)
             current_label = track_label(track)
+            lib.log_event("track_detected", current_label)
 
             if last_track_key and current_key != last_track_key:
                 lib.clear_screen()
@@ -136,11 +223,14 @@ def run_terminal(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTP
             local_path, _, local_reason = lib.load_local_lrc_text_with_reason(track)
             if local_path:
                 lib.debug_log("local_lrc", f"found {local_path}")
+                lib.log_event("cache_hit", str(local_path))
             else:
                 if local_reason:
                     lib.debug_log("local_lrc", f"invalid {local_reason}")
+                    lib.log_event("cache_invalid", local_reason)
                 else:
                     lib.debug_log("local_lrc", "missing")
+                    lib.log_event("cache_miss", current_label)
 
             if local_path:
                 last_track_key = current_key
@@ -239,9 +329,11 @@ def spawn_background_fetch(track: lib.TrackInfo, debug: bool = False) -> int | N
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         lib.debug_log("fetch_spawned", f"pid={proc.pid} cmd={cmd}")
+        lib.log_event("provider_selected", {"provider": "lyrics-fetch-go", "track": track_label(track)})
         return proc.pid
     except Exception as exc:
         lib.debug_log("fetch_spawn_failed", exc)
+        lib.log_event("fetch_failure", {"track": track_label(track), "error": str(exc)})
         return None
 
 
@@ -321,6 +413,7 @@ def stream_sptlrx_lines(
                     ],
                 )
                 lib.debug_log("sptlrx_no_output", "proc_exited_without_output")
+                lib.log_event("fetch_failure", {"provider": "sptlrx", "reason": "proc_exited_without_output", "track": track_label(track)})
                 return "no_output", None
             if status != last_status:
                 lib.debug_log("sptlrx_status", status)
@@ -333,6 +426,7 @@ def stream_sptlrx_lines(
                     ],
                 )
                 lib.debug_log("sptlrx_no_output", f"{format_seconds(no_output_timeout)}s_without_output")
+                lib.log_event("fetch_failure", {"provider": "sptlrx", "reason": "no_output_timeout", "track": track_label(track)})
                 return "no_output", None
             continue
 
@@ -341,6 +435,8 @@ def stream_sptlrx_lines(
             continue
         lib.render_single_line(text)
         last_line = text
+        if not output_seen:
+            lib.log_event("fetch_success", {"provider": "sptlrx", "track": track_label(track), "line": text})
         output_seen = True
         start_at = time.monotonic()
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 from importlib.machinery import SourceFileLoader
+import contextlib
+import io
 import types
 import unittest
 import tempfile
@@ -41,6 +43,9 @@ class FakeLib:
         self.tracks = iter(tracks)
         self.local_paths = local_paths
         self.calls: list[tuple[str, object]] = []
+        self.CACHE_DIR = real_lib.CACHE_DIR
+        self.LOCAL_DIR = real_lib.LOCAL_DIR
+        self.INDEX_PATH = real_lib.INDEX_PATH
 
     def setup_terminal(self) -> None:
         self.calls.append(("setup_terminal", None))
@@ -80,6 +85,9 @@ class FakeLib:
     def debug_log(self, label: str, value) -> None:
         self.calls.append(("debug_log", (label, value)))
 
+    def log_event(self, label: str, value=None) -> None:
+        self.calls.append(("log_event", (label, value)))
+
     def normalize_text(self, value: str) -> str:
         return value.lower()
 
@@ -94,6 +102,9 @@ class FakeLib:
 
     def current_line(self, lines, pos_ms):
         return lines[0][1] if lines else ""
+
+    def version_info(self):
+        return ("1.2.3", "abcdef0", "2024-01-02T03:04:05Z")
 
 
 class LyricsPlaylistTest(unittest.TestCase):
@@ -185,6 +196,57 @@ class LyricsPlaylistTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(calls, [("kitty", True, module.DEFAULT_NO_OUTPUT_SECONDS)])
+
+    def test_main_version_prints_metadata(self) -> None:
+        module = load_script_module()
+        fake_lib = FakeLib(statuses=[], tracks=[], local_paths={})
+        module.lib = fake_lib
+        original_argv = module.sys.argv
+        module.sys.argv = ["lyrics", "--version"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                result = module.main()
+        finally:
+            module.sys.argv = original_argv
+
+        self.assertEqual(result, 0)
+        text = stdout.getvalue()
+        self.assertIn("version: 1.2.3", text)
+        self.assertIn("commit: abcdef0", text)
+        self.assertIn("build_date: 2024-01-02T03:04:05Z", text)
+
+    def test_main_health_reports_statuses(self) -> None:
+        module = load_script_module()
+        fake_lib = FakeLib(statuses=[], tracks=[], local_paths={})
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        fake_lib.CACHE_DIR = Path(temp_dir.name) / "cache"
+        fake_lib.LOCAL_DIR = Path(temp_dir.name) / "local"
+        fake_lib.INDEX_PATH = fake_lib.CACHE_DIR / "index.json"
+        fake_lib.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        fake_lib.LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+        fake_lib.INDEX_PATH.write_text("{}", encoding="utf-8")
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.subprocess.run = lambda *args, **kwargs: types.SimpleNamespace(stdout="playing\n", stderr="", returncode=0)
+        original_argv = module.sys.argv
+        module.sys.argv = ["lyrics", "--health"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                result = module.main()
+        finally:
+            module.sys.argv = original_argv
+
+        self.assertEqual(result, 0)
+        text = stdout.getvalue()
+        self.assertIn("PASS spotify:", text)
+        self.assertIn("PASS playerctl:", text)
+        self.assertIn("PASS kitty:", text)
+        self.assertIn("PASS sptlrx:", text)
+        self.assertIn("PASS lyrics-fetch-go:", text)
+        self.assertIn("PASS cache directory:", text)
+        self.assertIn("PASS local lyrics directory:", text)
+        self.assertIn("PASS index.json:", text)
 
     def test_launch_kitty_uses_direct_exec(self) -> None:
         module = load_script_module()
@@ -375,8 +437,12 @@ class LyricsPlaylistTest(unittest.TestCase):
         track = real_lib.TrackInfo(artist="Aimar", title="LINGERIE", album="", duration_ms=0, track_id="")
         with tempfile.TemporaryDirectory() as tmp:
             original_dir = real_lib.LOCAL_DIR
+            original_cache = real_lib.CACHE_DIR
+            original_log = real_lib.LOG_PATH
             try:
                 real_lib.LOCAL_DIR = Path(tmp)
+                real_lib.CACHE_DIR = Path(tmp)
+                real_lib.LOG_PATH = real_lib.CACHE_DIR / "lyrics.log"
                 bad_path = real_lib.LOCAL_DIR / "Aimar - LINGERIE.lrc"
                 bad_path.write_text("[00:00.000]土砂降りの中 take a trip\n", encoding="utf-8")
 
@@ -387,6 +453,8 @@ class LyricsPlaylistTest(unittest.TestCase):
                 self.assertTrue(quarantined)
             finally:
                 real_lib.LOCAL_DIR = original_dir
+                real_lib.CACHE_DIR = original_cache
+                real_lib.LOG_PATH = original_log
 
 
 if __name__ == "__main__":

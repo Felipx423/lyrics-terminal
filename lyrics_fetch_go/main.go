@@ -72,6 +72,7 @@ func run(args []string) int {
 		return 0
 	}
 
+	debugLog(*debug, "startup", map[string]any{"mode": "run", "debug": *debug, "args": args})
 	debugLog(*debug, "paths", debugPaths())
 	track, ok, err := resolveTrack(*noSpotify, *artist, *title, *album, *duration, *trackID)
 	if err != nil {
@@ -87,11 +88,13 @@ func run(args []string) int {
 	if !*ignoreLocalCache && !*dryRun {
 		if existingPath, _, ok := findLocalLRCFn(track); ok {
 			debugLog(*debug, "local_exists", existingPath)
+			debugLog(*debug, "cache_hit", existingPath)
 			if err := recordSearchOutcomeFn(track, "found", "local-cache", existingPath, "", []string{existingPath}); err != nil {
 				debugLog(*debug, "index_error", err)
 			}
 			return 0
 		}
+		debugLog(*debug, "cache_miss", fmt.Sprintf("%s - %s", track.Artist, track.Title))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), globalTimeout)
@@ -100,6 +103,7 @@ func run(args []string) int {
 	cand, err := fetchLyricsFn(ctx, track, *debug, *deepSearch)
 	if err != nil {
 		if err == errNotFound {
+			debugLog(*debug, "fetch_failure", map[string]any{"provider": "pipeline", "reason": "not found"})
 			if !*dryRun {
 				if recErr := recordSearchOutcomeFn(track, "not_found", "", "", "", nil); recErr != nil {
 					debugLog(*debug, "index_error", recErr)
@@ -123,6 +127,7 @@ func run(args []string) int {
 		}
 		if err == errTimeout {
 			debugLog(*debug, "lrclib", "timeout, not caching negative result")
+			debugLog(*debug, "fetch_failure", map[string]any{"provider": "pipeline", "reason": "timeout"})
 			if !*dryRun {
 				if recErr := recordSearchOutcomeFn(track, "timeout", "", "", "", nil); recErr != nil {
 					debugLog(*debug, "index_error", recErr)
@@ -156,6 +161,7 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "result: not found")
 		return 0
 	}
+	debugLog(*debug, "fetch_success", map[string]any{"provider": cand.Provider, "source_id": cand.SourceID})
 	if *dryRun {
 		debugLog(*debug, "dry_run_winner", map[string]any{
 			"provider":  cand.Provider,
@@ -230,6 +236,7 @@ func splitFields(s, sep string) []string {
 }
 
 func debugLog(debug bool, label string, value any) {
+	logEvent(label, value)
 	if !debug {
 		return
 	}

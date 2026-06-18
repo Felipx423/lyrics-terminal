@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import errno
 import json
 import os
 import re
@@ -25,9 +26,14 @@ LOCAL_DIR = HOME / ".local" / "share" / "lyrics"
 CACHE_DIR = HOME / ".cache" / "lyrics-terminal"
 NEGATIVE_DIR = CACHE_DIR / "negative"
 INDEX_PATH = CACHE_DIR / "index.json"
+LOG_PATH = CACHE_DIR / "lyrics.log"
+BUILD_INFO_PATH = CACHE_DIR / "build-info.json"
+BUILD_INFO_PATHS = (CACHE_DIR / "build-info.json", HOME / ".local" / "share" / "lyrics" / "build-info.json")
 SPOTIFY_PLAYER = "spotify"
 FONT_FAMILY = "Monocraft"
 FONT_SIZE = "32"
+MAX_LOG_SIZE = 5 * 1024 * 1024
+MAX_LOG_FILES = 5
 
 OFFSET_TAG_RE = re.compile(r"^\[offset:([+-]?\d+)\]\s*$", re.IGNORECASE)
 LRC_LINE_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\](.*)")
@@ -54,8 +60,147 @@ LAST_RENDER: tuple[str, tuple[int, int], str] | None = None
 
 
 def debug_log(label: str, value: Any) -> None:
+    log_event(label, value)
     if DEBUG:
         print(f"[lyrics:debug] {label}: {value}", file=sys.stderr)
+
+
+def _log_path() -> Path:
+    return Path(CACHE_DIR) / "lyrics.log"
+
+
+def _ensure_log_dir() -> None:
+    try:
+        Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _rotate_logs() -> None:
+    path = _log_path()
+    if not path.exists():
+        return
+    try:
+        if path.stat().st_size < MAX_LOG_SIZE:
+            return
+    except Exception:
+        return
+    try:
+        oldest = path.with_name(f"{path.name}.{MAX_LOG_FILES - 1}")
+        if oldest.exists():
+            oldest.unlink()
+        for index in range(MAX_LOG_FILES - 2, 0, -1):
+            src = path.with_name(f"{path.name}.{index}")
+            dst = path.with_name(f"{path.name}.{index + 1}")
+            if src.exists():
+                src.replace(dst)
+        rotated = path.with_name(f"{path.name}.1")
+        if rotated.exists():
+            rotated.unlink()
+        path.replace(rotated)
+    except Exception:
+        pass
+
+
+def _format_log_value(value: Any) -> str:
+    if isinstance(value, BaseException):
+        return str(value)
+    if isinstance(value, Path):
+        return str(value)
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)
+
+
+def log_event(label: str, value: Any = None) -> None:
+    _ensure_log_dir()
+    path = _log_path()
+    _rotate_logs()
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+    payload = f"{timestamp} {label}"
+    if value is not None:
+        payload += f": {_format_log_value(value)}"
+    payload += "\n"
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(payload)
+    except OSError as exc:
+        if exc.errno not in {errno.ENOENT, errno.EACCES}:
+            pass
+
+
+def _read_build_info() -> dict[str, Any]:
+    for path in BUILD_INFO_PATHS:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def _git_metadata() -> dict[str, str]:
+    start = Path(__file__).resolve()
+    candidates = [start.parent, *start.parents]
+    repo_root = None
+    for candidate in candidates:
+        if (candidate / ".git").exists():
+            repo_root = candidate
+            break
+    if repo_root is None:
+        return {}
+    try:
+        version = subprocess.check_output(
+            ["git", "-C", str(repo_root), "describe", "--tags", "--always", "--dirty"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        version = ""
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        commit = ""
+    try:
+        build_date = subprocess.check_output(
+            ["git", "-C", str(repo_root), "show", "-s", "--format=%cI", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        build_date = ""
+    return {"version": version, "commit": commit, "build_date": build_date}
+
+
+def version_info() -> tuple[str, str, str]:
+    info = {
+        "version": os.environ.get("LYRICS_VERSION", ""),
+        "commit": os.environ.get("LYRICS_COMMIT", ""),
+        "build_date": os.environ.get("LYRICS_BUILD_DATE", ""),
+    }
+    build_info = _read_build_info()
+    for key in info:
+        if not info[key]:
+            value = build_info.get(key)
+            if isinstance(value, str):
+                info[key] = value
+    git_info = _git_metadata()
+    for key in info:
+        if not info[key]:
+            info[key] = git_info.get(key, "")
+    return (
+        info["version"] or "dev",
+        info["commit"] or "unknown",
+        info["build_date"] or "unknown",
+    )
 
 
 def setup_terminal() -> None:
@@ -294,6 +439,8 @@ def quarantine_bad_local_lrc(path: Path, reason: str) -> Path | None:
         bad_dir.mkdir(parents=True, exist_ok=True)
         target = bad_dir / f"{path.name}.{int(time.time())}.bad"
         path.rename(target)
+        debug_log("cache_invalid", reason)
+        debug_log("quarantine", str(target))
         return target
     except Exception:
         return None
@@ -313,6 +460,7 @@ def inspect_local_lrc(track: TrackInfo) -> tuple[Path | None, str | None, str | 
     if reason:
         quarantine_bad_local_lrc(path, reason)
         return None, None, reason
+    debug_log("cache_hit", str(path))
     return path, text, None
 
 
@@ -515,6 +663,7 @@ def save_local_lyrics(track: TrackInfo, lrc_text: str, provider: str, source_id:
         "files": [str(path) for path in saved],
     }
     save_index(index)
+    debug_log("fetch_success", {"provider": provider, "source_id": source_id, "files": [str(path) for path in saved]})
     return saved
 
 

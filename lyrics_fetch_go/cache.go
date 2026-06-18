@@ -342,13 +342,20 @@ func inspectLocalLRC(track Track) (string, string, bool) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			quarantineBadLRC(path)
+			debugLog(false, "cache_invalid", "unreadable")
+			if target := quarantineBadLRC(path); target != "" {
+				debugLog(false, "quarantine", target)
+			}
 			continue
 		}
 		if reason := localLRCInvalidReason(track, string(data)); reason != "" {
-			quarantineBadLRC(path)
+			debugLog(false, "cache_invalid", reason)
+			if target := quarantineBadLRC(path); target != "" {
+				debugLog(false, "quarantine", target)
+			}
 			continue
 		}
+		debugLog(false, "cache_hit", path)
 		return path, string(data), true
 	}
 	targetKey := trackKey(track)
@@ -369,16 +376,24 @@ func inspectLocalLRC(track Track) (string, string, bool) {
 			path := filepath.Join(localDir, name)
 			data, err := os.ReadFile(path)
 			if err != nil {
-				quarantineBadLRC(path)
+				debugLog(false, "cache_invalid", "unreadable")
+				if target := quarantineBadLRC(path); target != "" {
+					debugLog(false, "quarantine", target)
+				}
 				continue
 			}
 			if reason := localLRCInvalidReason(track, string(data)); reason != "" {
-				quarantineBadLRC(path)
+				debugLog(false, "cache_invalid", reason)
+				if target := quarantineBadLRC(path); target != "" {
+					debugLog(false, "quarantine", target)
+				}
 				continue
 			}
+			debugLog(false, "cache_hit", path)
 			return path, string(data), true
 		}
 	}
+	debugLog(false, "cache_miss", trackKey(track))
 	return "", "", false
 }
 

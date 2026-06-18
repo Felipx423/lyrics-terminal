@@ -141,14 +141,17 @@ func fetchLRCLIB(ctx context.Context, track Track, debug bool, deepSearch bool) 
 				"reason":          reason,
 			})
 			if !accepted {
+				debugLog(debug, "provider_rejected", map[string]any{"provider": "lrclib", "reason": reason, "source_id": sourceID})
 				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: failureCategoryFromReason(strings.ToLower(reason)), Reason: reason, Status: "invalid", SourceID: sourceID, TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 				continue
 			}
 			text := candText(cand)
 			if text == "" || !hasSyncedLines(text) {
+				debugLog(debug, "provider_rejected", map[string]any{"provider": "lrclib", "reason": "not synced", "source_id": sourceID})
 				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: "resultado não sincronizado", Reason: "lrclib candidate without synced lines", Status: "invalid", SourceID: sourceID, TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 				continue
 			}
+			debugLog(debug, "provider_selected", map[string]any{"provider": "lrclib", "source_id": sourceID})
 			return &Candidate{Text: text, Provider: "lrclib", SourceID: sourceID}, nil
 		}
 	}
@@ -337,6 +340,7 @@ func fetchNetEaseLyric(track Track, neteaseID int64, provider string, debug bool
 	lrc := parsed.LRC.Lyric
 	if strings.TrimSpace(lrc) == "" {
 		debugLog(debug, "netease_lyric", fmt.Sprintf("%d no lrc", neteaseID))
+		debugLog(debug, "provider_rejected", map[string]any{"provider": provider, "reason": "empty lyric", "source_id": neteaseID})
 		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: provider, Category: "letra inexistente", Reason: "netease returned empty lyric", Status: "not_found", SourceID: strconv.FormatInt(neteaseID, 10), TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 		return nil, errNotFound
 	}
@@ -360,9 +364,11 @@ func fetchNetEaseLyric(track Track, neteaseID int64, provider string, debug bool
 		"duration_diff": details["duration_diff"],
 	})
 	if !accepted {
+		debugLog(debug, "provider_rejected", map[string]any{"provider": provider, "reason": reason, "source_id": neteaseID})
 		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: provider, Category: failureCategoryFromReason(strings.ToLower(reason)), Reason: reason, Status: "invalid", SourceID: strconv.FormatInt(neteaseID, 10), TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 		return nil, errNotFound
 	}
+	debugLog(debug, "provider_selected", map[string]any{"provider": provider, "source_id": neteaseID})
 	return &Candidate{Text: lrc, Provider: provider, SourceID: strconv.FormatInt(neteaseID, 10)}, nil
 }
 
@@ -390,15 +396,18 @@ func fetchSyncedLyricsCLI(ctx context.Context, track Track, debug bool, deepSear
 		if runErr != nil {
 			if subctx.Err() == context.DeadlineExceeded {
 				debugLog(debug, "syncedlyrics_timeout", attempt)
+				debugLog(debug, "provider_rejected", map[string]any{"provider": "syncedlyrics", "reason": "timeout"})
 				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: "timeout", Reason: "syncedlyrics timeout", Status: "timeout", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 				return nil, errTimeout
 			}
 			debugLog(debug, "syncedlyrics_exit", runErr)
+			debugLog(debug, "provider_rejected", map[string]any{"provider": "syncedlyrics", "reason": runErr.Error()})
 			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: "provider indisponível", Reason: runErr.Error(), Status: "error", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 			continue
 		}
 		text := strings.TrimSpace(string(out))
 		if text == "" {
+			debugLog(debug, "provider_rejected", map[string]any{"provider": "syncedlyrics", "reason": "empty output"})
 			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: "letra inexistente", Reason: "syncedlyrics returned empty output", Status: "not_found", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 			continue
 		}
@@ -410,9 +419,11 @@ func fetchSyncedLyricsCLI(ctx context.Context, track Track, debug bool, deepSear
 				category = "resultado não sincronizado"
 				reason = "syncedlyrics output without timestamps"
 			}
+			debugLog(debug, "provider_rejected", map[string]any{"provider": "syncedlyrics", "reason": reason})
 			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: category, Reason: reason, Status: "invalid", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 			continue
 		}
+		debugLog(debug, "provider_selected", map[string]any{"provider": "syncedlyrics"})
 		return &Candidate{Text: text, Provider: "syncedlyrics"}, nil
 	}
 	return nil, errNotFound

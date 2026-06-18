@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument("--file", dest="file_path")
     args = parser.parse_args()
 
+    lib.log_event("startup", {"script": "lyrics-local", "mode": "run" if args.run else "kitty", "debug": args.debug})
+
     if args.run:
         return run_terminal(debug=args.debug, file_path=args.file_path)
     return launch_kitty(debug=args.debug, file_path=args.file_path)
@@ -76,13 +78,17 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
                 lib.render_message("No track metadata", ["Não consegui ler os metadados do Spotify."])
                 time.sleep(4)
                 return 1
+            lib.log_event("track_detected", f"{track.artist} - {track.title}")
             if not text:
+                lib.log_event("cache_miss", str(path))
                 lib.render_message("Lyrics not found", [str(path)])
                 time.sleep(4)
                 return 0
             reason = lib.local_lrc_invalid_reason(track, text)
             if reason:
                 lib.debug_log("local_lrc", f"invalid {reason}")
+                lib.log_event("cache_invalid", reason)
+                lib.log_event("quarantine", str(path))
                 lib.render_message("Invalid .lrc", [str(path)])
                 time.sleep(4)
                 return 0
@@ -92,6 +98,7 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
                 time.sleep(4)
                 return 0
             lib.debug_log("lrc_path", str(path))
+            lib.log_event("cache_hit", str(path))
             return stream_local(track, lines, offset_ms)
 
         status = lib.spotify_status()
@@ -108,11 +115,13 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
             return 1
 
         lib.debug_log("track", f"{track.artist} - {track.title}")
+        lib.log_event("track_detected", f"{track.artist} - {track.title}")
 
         path, text, reason = lib.load_local_lrc_text_with_reason(track)
         if not path or not text:
             if reason:
                 lib.debug_log("local_lrc", f"invalid {reason}")
+                lib.log_event("cache_invalid", reason)
             lib.render_message(
                 "Lyrics not found",
                 [
@@ -127,11 +136,13 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
         lines, offset_ms = lib.parse_lrc_text(text)
         if not lines:
             lib.debug_log("local_lrc", "invalid no_timestamp")
+            lib.log_event("cache_invalid", "no_timestamp")
             lib.render_message("Invalid .lrc", [str(path)])
             time.sleep(4)
             return 0
 
         lib.debug_log("lrc_path", str(path))
+        lib.log_event("cache_hit", str(path))
         return stream_local(track, lines, offset_ms)
     finally:
         lib.restore_terminal()

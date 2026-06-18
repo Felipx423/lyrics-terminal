@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
+DATA_DIR="${HOME}/.local/share/lyrics"
 GO_DIR="${ROOT_DIR}/lyrics_fetch_go"
 
 require_cmd() {
@@ -18,6 +19,20 @@ for dep in go python3 playerctl kitty sptlrx; do
 done
 
 mkdir -p "${BIN_DIR}"
+mkdir -p "${DATA_DIR}"
+
+VERSION_INFO_FILE="${DATA_DIR}/build-info.json"
+VERSION_VALUE="$(git -C "${ROOT_DIR}" describe --tags --always --dirty 2>/dev/null || echo dev)"
+COMMIT_VALUE="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
+BUILD_DATE_VALUE="$(date -Iseconds)"
+
+cat > "${VERSION_INFO_FILE}" <<EOF
+{
+  "version": "${VERSION_VALUE}",
+  "commit": "${COMMIT_VALUE}",
+  "build_date": "${BUILD_DATE_VALUE}"
+}
+EOF
 
 echo "building lyrics-fetch-go"
 (cd "${GO_DIR}" && go build -o "${BIN_DIR}/lyrics-fetch-go" .)
