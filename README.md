@@ -24,7 +24,6 @@ Foi criado para quem quer uma experiência leve, bonita e focada no terminal, se
 * Análise de falhas dos providers
 * Logs rotativos
 * Observabilidade em tempo de execução
-* Versionamento com commit e build date
 
 ## Screenshot
 
