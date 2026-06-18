@@ -10,3 +10,14 @@ Quando a faixa muda em uma playlist, o comando principal reavalia a faixa atual,
 
 Prioridade:
 Alta.
+
+## lyrics encerra ao pausar Spotify
+
+Status:
+Resolvido.
+
+Descrição:
+Quando o Spotify entra em `paused`, o comando `lyrics` agora mantém a última linha na tela, espera a retomada do `play`, e reinicia o pipeline se a faixa mudar enquanto está pausado.
+
+Prioridade:
+Alta.

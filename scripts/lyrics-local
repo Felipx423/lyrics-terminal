@@ -15,6 +15,8 @@ import lyricslib as lib
 
 SCRIPT = Path(__file__).resolve()
 POLL_INTERVAL_SECONDS = 0.20
+PAUSE_POLL_SECONDS = 0.50
+EXIT_TRACK_CHANGED = 3
 
 
 def main() -> int:
@@ -129,14 +131,32 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
 def stream_local(track: lib.TrackInfo, lines: list[tuple[int, str]], offset_ms: int) -> int:
     last_line = ""
     last_size = (0, 0)
+    was_paused = False
     while True:
         status = lib.spotify_status()
+        if status == "paused":
+            if not was_paused:
+                lib.debug_log("spotify_paused", track_label(track))
+                was_paused = True
+            fresh = lib.get_track_info()
+            if not fresh or not same_track(fresh, track):
+                lib.debug_log("track_changed_while_paused", f"{track_label(track)} -> {track_label(fresh) if fresh else 'unknown'}")
+                return EXIT_TRACK_CHANGED
+            lib.debug_log("paused_wait", "lyrics-local")
+            time.sleep(PAUSE_POLL_SECONDS)
+            continue
         if status != "playing":
             break
 
+        if was_paused:
+            lib.debug_log("spotify_resumed", track_label(track))
+            was_paused = False
+
         fresh = lib.get_track_info()
-        if not fresh or lib.normalize_text(f"{fresh.artist} - {fresh.title}") != lib.normalize_text(f"{track.artist} - {track.title}"):
+        if not fresh:
             break
+        if not same_track(fresh, track):
+            return EXIT_TRACK_CHANGED
 
         pos_ms = lib.current_position_ms() + offset_ms
         line = lib.current_line(lines, pos_ms)
@@ -151,6 +171,16 @@ def stream_local(track: lib.TrackInfo, lines: list[tuple[int, str]], offset_ms: 
         time.sleep(POLL_INTERVAL_SECONDS)
 
     return 0
+
+
+def track_label(track: lib.TrackInfo | None) -> str:
+    if not track:
+        return "unknown"
+    return f"{track.artist} - {track.title}"
+
+
+def same_track(a: lib.TrackInfo, b: lib.TrackInfo) -> bool:
+    return lib.normalize_text(track_label(a)) == lib.normalize_text(track_label(b))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "lyrics"
+LOCAL_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "lyrics-local"
 
 
 def load_script_module():
@@ -15,6 +16,16 @@ def load_script_module():
     spec = importlib.util.spec_from_loader(loader.name, loader)
     if spec is None or spec.loader is None:
         raise RuntimeError("unable to load scripts/lyrics")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def load_local_script_module():
+    loader = SourceFileLoader("lyrics_local_script", str(LOCAL_SCRIPT_PATH))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load scripts/lyrics-local")
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
@@ -63,6 +74,12 @@ class FakeLib:
 
     def terminate_process(self, proc) -> None:
         self.calls.append(("terminate_process", getattr(proc, "pid", None)))
+
+    def current_position_ms(self) -> int:
+        return 1000
+
+    def current_line(self, lines, pos_ms):
+        return lines[0][1] if lines else ""
 
 
 class LyricsPlaylistTest(unittest.TestCase):
@@ -152,6 +169,84 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertIsNotNone(fresh)
         debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
         self.assertIn(("local_lrc", "appeared"), debug_logs)
+
+    def test_local_stream_returns_track_changed_while_paused(self) -> None:
+        module = load_local_script_module()
+        track_one = types.SimpleNamespace(artist="Artist One", title="First Song")
+        track_two = types.SimpleNamespace(artist="Artist Two", title="Second Song")
+        fake_lib = FakeLib(
+            statuses=["playing", "paused", "paused"],
+            tracks=[track_one, track_one, track_two],
+            local_paths={},
+        )
+        rendered: list[str] = []
+        slept: list[float] = []
+
+        module.lib = fake_lib
+        module.time.sleep = lambda seconds: slept.append(seconds)
+        module.lib.render_single_line = lambda text: rendered.append(text)
+
+        status = module.stream_local(track_one, [(0, "line one")], 0)
+
+        self.assertEqual(status, module.EXIT_TRACK_CHANGED)
+        self.assertEqual(rendered, ["line one"])
+        self.assertIn(module.PAUSE_POLL_SECONDS, slept)
+        debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
+        self.assertIn(("spotify_paused", "Artist One - First Song"), debug_logs)
+        self.assertIn(("paused_wait", "lyrics-local"), debug_logs)
+        self.assertIn(("track_changed_while_paused", "Artist One - First Song -> Artist Two - Second Song"), debug_logs)
+
+    def test_sptlrx_stream_pauses_and_resumes(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Paused Song", album="", duration_ms=180000, track_id="1")
+        fake_lib = FakeLib(
+            statuses=["playing", "paused", "paused", "playing", "stopped"],
+            tracks=[track, track, track, track, track],
+            local_paths={},
+        )
+        slept: list[float] = []
+
+        module.lib = fake_lib
+        module.time.sleep = lambda seconds: slept.append(seconds)
+        module.read_line = lambda proc, timeout: None
+
+        proc = types.SimpleNamespace(stdout=object(), poll=lambda: None, pid=10)
+        status, fresh = module.stream_sptlrx_lines(proc, track, no_output_timeout=10.0)
+
+        self.assertEqual(status, "stopped")
+        self.assertIsNone(fresh)
+        debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
+        self.assertIn(("spotify_paused", "Artist - Paused Song"), debug_logs)
+        self.assertIn(("paused_wait", "sptlrx"), debug_logs)
+        self.assertIn(("spotify_resumed", "Artist - Paused Song"), debug_logs)
+        self.assertIn(module.POLL_INTERVAL_SECONDS, slept)
+
+    def test_run_terminal_restarts_after_local_track_changed_exit(self) -> None:
+        module = load_script_module()
+        track_one = types.SimpleNamespace(artist="Artist One", title="First Song", album="", duration_ms=180000, track_id="1")
+        track_two = types.SimpleNamespace(artist="Artist Two", title="Second Song", album="", duration_ms=200000, track_id="2")
+        fake_lib = FakeLib(
+            statuses=["playing", "playing", "stopped"],
+            tracks=[track_one, track_two, track_two],
+            local_paths={"Second Song": "/tmp/second-song.lrc"},
+        )
+        exec_results = iter([module.EXIT_TRACK_CHANGED, 0])
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.spawn_background_fetch = lambda track, debug=False: 4321
+        module.exec_lyrics_local = lambda debug=False: next(exec_results)
+        sptlrx_calls: list[str] = []
+        module.stream_sptlrx = lambda track, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: sptlrx_calls.append(track.title) or ("track_changed", track_two)
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(sptlrx_calls, ["First Song"])
+        debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
+        self.assertIn(("track_changed", "Artist One - First Song -> Artist Two - Second Song"), debug_logs)
+        self.assertIn(("pipeline_restart", "restarting_pipeline"), debug_logs)
 
 
 if __name__ == "__main__":

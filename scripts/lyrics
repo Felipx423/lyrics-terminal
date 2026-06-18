@@ -18,6 +18,7 @@ FETCH_GO_SCRIPT = SCRIPT.with_name("lyrics-fetch-go")
 POLL_INTERVAL_SECONDS = 0.20
 LOCAL_LRC_POLL_SECONDS = 2.0
 DEFAULT_NO_OUTPUT_SECONDS = 10.0
+EXIT_TRACK_CHANGED = 3
 
 
 def main() -> int:
@@ -79,11 +80,21 @@ def run_terminal(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTP
         last_track_key: str | None = None
         last_track_label = ""
         fetch_spawned_for_key: str | None = None
+        outer_was_paused = False
 
         started = False
         while True:
             status = lib.spotify_status()
             lib.debug_log("spotify_status", status or "unknown")
+            if status == "paused":
+                if not outer_was_paused:
+                    lib.debug_log("spotify_paused", "lyrics")
+                    outer_was_paused = True
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            if outer_was_paused and status == "playing":
+                lib.debug_log("spotify_resumed", "lyrics")
+                outer_was_paused = False
             if status != "playing":
                 if not started:
                     lib.render_message(
@@ -125,6 +136,16 @@ def run_terminal(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTP
                 last_track_key = current_key
                 last_track_label = current_label
                 exit_code = exec_lyrics_local(debug=debug)
+                if exit_code == EXIT_TRACK_CHANGED:
+                    fresh = lib.get_track_info()
+                    next_label = track_label(fresh) if fresh else "unknown"
+                    lib.clear_screen()
+                    lib.debug_log("track_changed", f"{current_label} -> {next_label}")
+                    lib.debug_log("pipeline_restart", "restarting_pipeline")
+                    last_track_key = track_signature(fresh) if fresh else None
+                    last_track_label = next_label
+                    fetch_spawned_for_key = None
+                    continue
             else:
                 if fetch_spawned_for_key != current_key:
                     if spawn_background_fetch(track, debug=debug) is not None:
@@ -250,8 +271,25 @@ def stream_sptlrx_lines(
     last_status = ""
     start_at = time.monotonic()
     output_seen = False
+    was_paused = False
     while True:
         status = lib.spotify_status()
+        if status == "paused":
+            if not was_paused:
+                lib.debug_log("spotify_paused", track_label(track))
+                was_paused = True
+            lib.debug_log("paused_wait", "sptlrx")
+            fresh = lib.get_track_info()
+            if fresh and track_signature(fresh) != track_signature(track):
+                lib.debug_log("track_changed_while_paused", f"{track_label(track)} -> {track_label(fresh)}")
+                return "track_changed", fresh
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
+
+        if was_paused and status == "playing":
+            lib.debug_log("spotify_resumed", track_label(track))
+            was_paused = False
+
         if status != "playing":
             return "stopped", None
 
