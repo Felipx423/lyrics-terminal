@@ -1,64 +1,288 @@
 # Lyrics Terminal
 
-Sistema de letras sincronizadas para Spotify no Linux.
+<p align="center">
+  <img src="assets/demo.gif" alt="Demonstração do Lyrics Terminal">
+</p>
 
-## Demonstração
+Lyrics Terminal é uma aplicação para Linux que exibe letras sincronizadas do Spotify diretamente no terminal, com detecção automática de música, cache local, fallback entre providers, diagnósticos de saúde e ferramentas de observabilidade.
 
-![Demo](assets/demo.gif)
+Foi criado para quem quer uma experiência leve, bonita e focada no terminal, sem depender de overlays no navegador ou aplicações pesadas.
 
-Versão em vídeo: [demo.mp4](assets/demo.mp4)
+## Funcionalidades
 
-![Screenshot](assets/screenshot.png)
+* Letras sincronizadas para músicas tocando no Spotify
+* Modo com janela dedicada no Kitty
+* Modo no terminal atual
+* Suporte a playlists contínuas
+* Detecção automática de troca de música
+* Suporte a pause e resume
+* Cache local em arquivos `.lrc`
+* Validação automática do cache
+* Quarentena automática de letras inválidas
+* Sistema de fallback entre providers
+* Diagnóstico com `lyrics --health`
+* Análise de falhas dos providers
+* Logs rotativos
+* Observabilidade em tempo de execução
+* Versionamento com commit e build date
+
+## Screenshot
+
+<p align="center">
+  <img src="assets/screenshot.png" alt="Screenshot do Lyrics Terminal">
+</p>
+
+## Arquitetura
+
+O projeto é dividido em alguns componentes principais.
+
+### lyrics
+
+Comando principal usado pelo usuário.
+
+Responsável por:
+
+* monitorar o Spotify
+* controlar o ciclo de vida da música atual
+* gerenciar troca de faixas
+* lidar com pause e resume
+* controlar a renderização da letra
+* integrar com o Kitty
+
+### lyrics-fetch-go
+
+Motor de busca e seleção de letras.
+
+Responsável por:
+
+* consultar providers
+* escolher a melhor letra disponível
+* validar metadados
+* gerenciar cache
+* registrar falhas
+* gerar estatísticas
+
+### lyricslib
+
+Biblioteca Python compartilhada usada pelo runtime.
+
+## Providers suportados
+
+Ordem atual dos providers:
+
+1. LRCLIB
+2. NetEase Map
+3. NetEase Search
+4. syncedlyrics
+
+Nos testes reais, o LRCLIB tem sido o provider mais consistente e responsável pela maior parte dos sucessos.
 
 ## Instalação
 
-1. Garanta estas dependências no sistema: `go`, `python3`, `playerctl`, `kitty`, `sptlrx`.
-2. Execute `./install.sh` na raiz do projeto.
-3. O script compila `lyrics-fetch-go` e instala os binários em `~/.local/bin/`.
+Clone o repositório:
 
-## Comandos
+```bash
+git clone https://github.com/Felipx423/lyrics-terminal.git
+cd lyrics-terminal
+```
 
-- `lyrics`: comando principal.
-- `lyrics-local`: usa `.lrc` local sincronizado.
-- `lyrics-fetch-go`: busca `.lrc` em providers externos, mostra métricas com `--stats`, faz teste sem salvar com `--dry-run` e analisa falhas com `--analyze-failures`.
-- Log principal: `~/.cache/lyrics-terminal/lyrics.log`
+Execute o instalador:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
 
 ## Uso
 
-- `lyrics`: abre uma janela Kitty dedicada com Monocraft 32.
-- `lyrics --current`: executa o fluxo no terminal atual.
-- `lyrics --kitty`: abre uma nova janela do Kitty.
-- `lyrics --run`: mantém compatibilidade e executa no terminal atual.
-- `lyrics --health`: verifica dependências e arquivos principais.
-- `lyrics --version`: mostra versão, commit e data de build quando disponível.
-- `lyrics --debug`: abre Kitty com logs de debug.
-- `lyrics --current --debug`: executa no terminal atual com logs de debug.
-- `lyrics --kitty --debug`: abre Kitty com logs de debug.
-- `lyrics-local --debug --run`: roda diretamente o renderer de `.lrc` local.
-- `lyrics-fetch-go --debug`: busca e salva a letra sincronizada do Spotify atual.
-- `lyrics-fetch-go --stats`: mostra estatísticas do índice e do cache.
-- `lyrics-fetch-go --dry-run --debug`: executa a busca sem salvar `.lrc`.
-- `lyrics-fetch-go --analyze-failures`: consolida falhas persistidas, quarentena e cache negativo em um relatório.
+Abrir no modo padrão, com janela dedicada no Kitty:
 
-No modo `--current`, a fonte e o tamanho passam a ser controlados pelo terminal atual.
+```bash
+lyrics
+```
 
-## Fluxo
+Rodar no terminal atual:
 
-1. `lyrics` verifica se já existe `.lrc` local válido.
-2. Se existir e passar na validação, usa `lyrics-local`.
-3. Se não existir, usa `sptlrx pipe`.
-4. Em background, chama `lyrics-fetch-go` para tentar baixar a letra.
+```bash
+lyrics --current
+```
 
-Arquivos `.lrc` suspeitos são movidos para `~/.local/share/lyrics/bad/` e tratados como cache miss.
+Abrir explicitamente no modo Kitty:
 
-## Pastas
+```bash
+lyrics --kitty
+```
 
-- Letras locais: `~/.local/share/lyrics/`
-- Cache: `~/.cache/lyrics-terminal/`
+Mostrar versão:
 
-## Dependências
+```bash
+lyrics --version
+```
 
-- `kitty`
-- `playerctl`
-- `sptlrx`
-- `go`, apenas para build
+Rodar diagnóstico:
+
+```bash
+lyrics --health
+```
+
+## Diagnóstico
+
+O comando de diagnóstico verifica:
+
+* Spotify
+* playerctl
+* Kitty
+* sptlrx
+* lyrics-fetch-go
+* diretórios de cache
+* configuração básica do ambiente
+
+Exemplo:
+
+```bash
+lyrics --health
+```
+
+## Observabilidade
+
+O projeto registra eventos importantes de execução para facilitar debug e análise de problemas reais.
+
+Arquivo de log:
+
+```text
+~/.cache/lyrics-terminal/lyrics.log
+```
+
+Eventos registrados incluem:
+
+* startup
+* track_detected
+* track_changed
+* provider_selected
+* provider_rejected
+* fetch_success
+* fetch_failure
+* cache_hit
+* cache_miss
+* cache_invalid
+* quarantine
+* spotify_paused
+* spotify_resumed
+
+Rotação de logs:
+
+* 5 arquivos mantidos
+* 5 MB por arquivo
+
+## Análise de falhas
+
+O motor de busca registra falhas dos providers para análise posterior.
+
+Rodar análise:
+
+```bash
+lyrics-fetch-go --analyze-failures
+```
+
+Arquivo de falhas:
+
+```text
+~/.cache/lyrics-terminal/failures.jsonl
+```
+
+Categorias analisadas:
+
+* timeout
+* letra não encontrada
+* diferença de duração
+* diferença de artista
+* diferença de título
+* letra não sincronizada
+* cache inválido
+* provider indisponível
+
+## Estatísticas
+
+Ver estatísticas do sistema:
+
+```bash
+lyrics-fetch-go --stats
+```
+
+As estatísticas incluem:
+
+* quantidade de letras no cache local
+* quantidade de arquivos em quarentena
+* uso por provider
+* taxa de sucesso
+* últimos resultados
+
+## Sistema de cache
+
+As letras são salvas localmente em arquivos `.lrc`.
+
+Entradas válidas do cache são reutilizadas automaticamente.
+
+Arquivos inválidos são movidos para:
+
+```text
+~/.local/share/lyrics/bad/
+```
+
+Isso evita que letras corrompidas ou incorretas continuem afetando execuções futuras.
+
+## Solução de problemas
+
+### Nenhuma letra aparece
+
+Verifique se o Spotify está tocando:
+
+```bash
+playerctl metadata
+```
+
+Depois rode:
+
+```bash
+lyrics --health
+```
+
+### Letra errada aparece
+
+O projeto valida o cache automaticamente e move arquivos inválidos para quarentena.
+
+Também é possível analisar falhas com:
+
+```bash
+lyrics-fetch-go --analyze-failures
+```
+
+### A janela do Kitty não abre
+
+Verifique se o Kitty está instalado e disponível no PATH:
+
+```bash
+kitty --version
+```
+
+## Status do projeto
+
+Versão atual:
+
+**v0.5.0-observability**
+
+O projeto está em fase de teste real, com foco em:
+
+* letras incorretas
+* músicas sem letra
+* confiabilidade dos providers
+* problemas de UX
+* estabilidade em uso contínuo
+
+Novas features grandes estão sendo deixadas para depois até o comportamento real do sistema ficar mais sólido.
+
+## Licença
+
+Este projeto está licenciado sob a licença MIT.
+
+Consulte o arquivo LICENSE para mais detalhes.
