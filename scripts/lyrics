@@ -16,16 +16,19 @@ import lyricslib as lib
 SCRIPT = Path(__file__).resolve()
 FETCH_GO_SCRIPT = SCRIPT.with_name("lyrics-fetch-go")
 POLL_INTERVAL_SECONDS = 0.20
+LOCAL_LRC_POLL_SECONDS = 2.0
+DEFAULT_NO_OUTPUT_SECONDS = 10.0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--no-output-timeout", type=float, default=DEFAULT_NO_OUTPUT_SECONDS)
     args = parser.parse_args()
 
     if args.run:
-        return run_terminal(debug=args.debug)
+        return run_terminal(debug=args.debug, no_output_timeout=args.no_output_timeout)
     return launch_kitty(debug=args.debug)
 
 
@@ -61,7 +64,7 @@ def runtime_flags(debug: bool) -> list[str]:
     return flags
 
 
-def run_terminal(debug: bool = False) -> int:
+def run_terminal(debug: bool = False, no_output_timeout: float = DEFAULT_NO_OUTPUT_SECONDS) -> int:
     lib.DEBUG = debug
     lib.setup_terminal()
     try:
@@ -69,6 +72,9 @@ def run_terminal(debug: bool = False) -> int:
         if missing:
             lib.render_message("Dependencies missing", ["Instale:", *[f"- {name}" for name in missing]])
             return 1
+
+        if debug:
+            lib.debug_log("no_output_timeout", f"{format_seconds(no_output_timeout)}s")
 
         last_track_key: str | None = None
         last_track_label = ""
@@ -123,8 +129,7 @@ def run_terminal(debug: bool = False) -> int:
                 if fetch_spawned_for_key != current_key:
                     if spawn_background_fetch(track, debug=debug) is not None:
                         fetch_spawned_for_key = current_key
-                lib.debug_log("sptlrx_start", current_label)
-                stream_status, next_track = stream_sptlrx(track)
+                stream_status, next_track = stream_sptlrx(track, no_output_timeout=no_output_timeout)
 
                 if stream_status == "track_changed":
                     lib.clear_screen()
@@ -209,7 +214,7 @@ def spawn_background_fetch(track: lib.TrackInfo, debug: bool = False) -> int | N
         return None
 
 
-def stream_sptlrx(track: lib.TrackInfo) -> tuple[str, lib.TrackInfo | None]:
+def stream_sptlrx(track: lib.TrackInfo, no_output_timeout: float = DEFAULT_NO_OUTPUT_SECONDS) -> tuple[str, lib.TrackInfo | None]:
     if not shutil.which("sptlrx"):
         lib.render_message(
             "sptlrx missing",
@@ -229,12 +234,16 @@ def stream_sptlrx(track: lib.TrackInfo) -> tuple[str, lib.TrackInfo | None]:
         bufsize=1,
     )
     try:
-        return stream_sptlrx_lines(proc, track)
+        return stream_sptlrx_lines(proc, track, no_output_timeout=no_output_timeout)
     finally:
         lib.terminate_process(proc)
 
 
-def stream_sptlrx_lines(proc: subprocess.Popen[str], track: lib.TrackInfo) -> tuple[str, lib.TrackInfo | None]:
+def stream_sptlrx_lines(
+    proc: subprocess.Popen[str],
+    track: lib.TrackInfo,
+    no_output_timeout: float = DEFAULT_NO_OUTPUT_SECONDS,
+) -> tuple[str, lib.TrackInfo | None]:
     if proc.stdout is None:
         return "no_output", None
     last_line = ""
@@ -268,14 +277,14 @@ def stream_sptlrx_lines(proc: subprocess.Popen[str], track: lib.TrackInfo) -> tu
             if status != last_status:
                 lib.debug_log("sptlrx_status", status)
                 last_status = status
-            if not output_seen and time.monotonic() - start_at >= 3.0:
+            if not output_seen and time.monotonic() - start_at >= no_output_timeout:
                 lib.render_message(
                     "Buscando letra...",
                     [
                         "Aguardando sptlrx ou cache local.",
                     ],
                 )
-                lib.debug_log("sptlrx_no_output", "3s_without_output")
+                lib.debug_log("sptlrx_no_output", f"{format_seconds(no_output_timeout)}s_without_output")
                 return "no_output", None
             continue
 
@@ -302,9 +311,16 @@ def wait_for_local_lrc_or_track_change(track: lib.TrackInfo) -> tuple[str, lib.T
             return "track_changed", fresh
 
         if lib.find_local_lrc(track):
+            lib.debug_log("local_lrc", "appeared")
             return "local_ready", fresh
 
-        time.sleep(POLL_INTERVAL_SECONDS)
+        time.sleep(LOCAL_LRC_POLL_SECONDS)
+
+
+def format_seconds(value: float) -> str:
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:g}"
 
 
 def read_line(proc: subprocess.Popen[str], timeout: float) -> str | None:

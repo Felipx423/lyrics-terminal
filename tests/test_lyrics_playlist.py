@@ -82,8 +82,9 @@ class LyricsPlaylistTest(unittest.TestCase):
         module.shutil.which = lambda name: f"/usr/bin/{name}"
         module.time.sleep = lambda *_args, **_kwargs: None
         module.spawn_background_fetch = lambda track, debug=False: fake_lib.debug_log("fetch_spawned", "pid=4321") or 4321
-        module.stream_sptlrx = lambda track: stream_calls.append(track.title) or ("track_changed", track_two)
+        module.stream_sptlrx = lambda track, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: stream_calls.append(track.title) or ("track_changed", track_two)
         module.exec_lyrics_local = lambda debug=False: local_calls.append("local") or 0
+        module.DEFAULT_NO_OUTPUT_SECONDS = 10.0
 
         result = module.run_terminal(debug=True)
 
@@ -97,13 +98,14 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertIn(("track_changed", "Artist One - First Song -> Artist Two - Second Song"), debug_logs)
         self.assertIn(("pipeline_restart", "restarting_pipeline"), debug_logs)
         self.assertIn(("fetch_spawned", "pid=4321"), debug_logs)
+        self.assertIn(("no_output_timeout", "10s"), debug_logs)
 
     def test_stream_no_output_renders_wait_message(self) -> None:
         module = load_script_module()
         track = types.SimpleNamespace(artist="Artist", title="Silent Song", album="", duration_ms=180000, track_id="1")
         fake_lib = FakeLib(
-            statuses=["playing", "playing", "playing", "playing", "playing", "playing", "playing"],
-            tracks=[track, track, track, track, track, track, track],
+            statuses=["playing"] * 30,
+            tracks=[track] * 30,
             local_paths={},
         )
         render_messages: list[str] = []
@@ -117,13 +119,13 @@ class LyricsPlaylistTest(unittest.TestCase):
 
         proc = types.SimpleNamespace(stdout=object(), poll=lambda: None, pid=99)
 
-        status, next_track = module.stream_sptlrx_lines(proc, track)
+        status, next_track = module.stream_sptlrx_lines(proc, track, no_output_timeout=10.0)
 
         self.assertEqual(status, "no_output")
         self.assertIsNone(next_track)
         self.assertIn("Buscando letra...", render_messages)
         debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
-        self.assertIn(("sptlrx_no_output", "3s_without_output"), debug_logs)
+        self.assertIn(("sptlrx_no_output", "10s_without_output"), debug_logs)
 
     def test_wait_helper_detects_local_lrc(self) -> None:
         module = load_script_module()
@@ -148,6 +150,8 @@ class LyricsPlaylistTest(unittest.TestCase):
 
         self.assertEqual(status, "local_ready")
         self.assertIsNotNone(fresh)
+        debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
+        self.assertIn(("local_lrc", "appeared"), debug_logs)
 
 
 if __name__ == "__main__":
