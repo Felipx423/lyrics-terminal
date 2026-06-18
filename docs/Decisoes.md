@@ -28,3 +28,13 @@ Motivo:
 
 Status:
 Ativo.
+
+## Registrar diagnósticos de fetch no índice
+
+Motivo:
+- precisamos medir taxa de sucesso, origem e histórico recente sem depender de logs;
+- `lyrics-fetch-go --stats` deve ler um índice já enriquecido com `status`, `provider`, `source_id`, `created_at` e `duration`;
+- `--dry-run` não deve alterar cache nem quarentena.
+
+Status:
+Ativo.

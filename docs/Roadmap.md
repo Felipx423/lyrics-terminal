@@ -8,3 +8,4 @@
 4. Melhorar README.
 5. Testar fluxo completo com músicas com e sem `.lrc`.
 6. Adicionar timeout opcional para Spotify stopped/closed após 60s.
+7. [x] Adicionar modo `--stats` e `--dry-run` ao `lyrics-fetch-go`.

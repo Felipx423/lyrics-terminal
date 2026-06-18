@@ -12,7 +12,7 @@ Sistema de letras sincronizadas para Spotify no Linux.
 
 - `lyrics`: comando principal.
 - `lyrics-local`: usa `.lrc` local sincronizado.
-- `lyrics-fetch-go`: busca `.lrc` em providers externos e salva localmente.
+- `lyrics-fetch-go`: busca `.lrc` em providers externos, mostra métricas com `--stats` e faz teste sem salvar com `--dry-run`.
 
 ## Uso
 
@@ -25,6 +25,8 @@ Sistema de letras sincronizadas para Spotify no Linux.
 - `lyrics --kitty --debug`: abre Kitty com logs de debug.
 - `lyrics-local --debug --run`: roda diretamente o renderer de `.lrc` local.
 - `lyrics-fetch-go --debug`: busca e salva a letra sincronizada do Spotify atual.
+- `lyrics-fetch-go --stats`: mostra estatísticas do índice e do cache.
+- `lyrics-fetch-go --dry-run --debug`: executa a busca sem salvar `.lrc`.
 
 No modo `--current`, a fonte e o tamanho passam a ser controlados pelo terminal atual.
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -55,6 +56,43 @@ func saveIndex(index map[string]IndexEntry) error {
 		return err
 	}
 	return os.Rename(tmp, indexPath)
+}
+
+func upsertIndexEntry(track Track, patch IndexEntry) error {
+	index := loadIndex()
+	now := time.Now().Unix()
+	key := trackKey(track)
+	entry := index[key]
+	if entry.CreatedAt == 0 {
+		entry.CreatedAt = now
+	}
+	entry.UpdatedAt = now
+	if patch.Artist != "" {
+		entry.Artist = patch.Artist
+	}
+	if patch.Title != "" {
+		entry.Title = patch.Title
+	}
+	if patch.Provider != "" {
+		entry.Provider = patch.Provider
+	}
+	if patch.SourceID != "" {
+		entry.SourceID = patch.SourceID
+	}
+	if patch.DurationMs != 0 {
+		entry.DurationMs = patch.DurationMs
+	}
+	if patch.Status != "" {
+		entry.Status = patch.Status
+	}
+	if patch.RejectionReason != "" {
+		entry.RejectionReason = patch.RejectionReason
+	}
+	if patch.Files != nil {
+		entry.Files = patch.Files
+	}
+	index[key] = entry
+	return saveIndex(index)
 }
 
 func atomicWriteFile(path string, data []byte) error {
@@ -263,19 +301,47 @@ func saveLocalLyrics(track Track, lrcText string, provider string, sourceID stri
 		}
 		saved = append(saved, normalized)
 	}
-	index := loadIndex()
-	index[trackKey(track)] = IndexEntry{
-		Artist:    track.Artist,
-		Title:     track.Title,
-		Provider:  provider,
-		SourceID:  sourceID,
-		UpdatedAt: time.Now().Unix(),
-		Files:     saved,
-	}
-	if err := saveIndex(index); err != nil {
+	if err := upsertIndexEntry(track, IndexEntry{
+		Artist:     track.Artist,
+		Title:      track.Title,
+		Provider:   provider,
+		SourceID:   sourceID,
+		DurationMs: track.DurationMs,
+		Status:     "found",
+		Files:      saved,
+	}); err != nil {
 		return nil, err
 	}
 	return saved, nil
+}
+
+func recordSearchOutcome(track Track, status, provider, sourceID, reason string, files []string) error {
+	index := loadIndex()
+	key := trackKey(track)
+	now := time.Now().Unix()
+	entry := index[key]
+	if entry.CreatedAt == 0 {
+		entry.CreatedAt = now
+	}
+	entry.UpdatedAt = now
+	entry.Artist = track.Artist
+	entry.Title = track.Title
+	entry.DurationMs = track.DurationMs
+	entry.Status = status
+	entry.RejectionReason = reason
+	if status == "found" {
+		entry.Provider = provider
+		entry.SourceID = sourceID
+		if files != nil {
+			entry.Files = files
+		}
+	} else {
+		entry.Provider = ""
+		entry.SourceID = ""
+		entry.Files = nil
+	}
+	index[key] = entry
+	return saveIndex(index)
 }
 
 func loadLyricsMap() map[string]any {
@@ -294,4 +360,18 @@ func loadLyricsMap() map[string]any {
 
 func debugPaths() string {
 	return fmt.Sprintf("local=%s cache=%s index=%s", localDir, cacheDir, indexPath)
+}
+
+func sortedIndexEntries(index map[string]IndexEntry) []IndexEntry {
+	out := make([]IndexEntry, 0, len(index))
+	for _, entry := range index {
+		out = append(out, entry)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt == out[j].CreatedAt {
+			return out[i].UpdatedAt > out[j].UpdatedAt
+		}
+		return out[i].CreatedAt > out[j].CreatedAt
+	})
+	return out
 }

@@ -16,6 +16,14 @@ const (
 	globalTimeout    = 20 * time.Second
 )
 
+var (
+	fetchLyricsFn         = fetchLyrics
+	findLocalLRCFn        = findLocalLRC
+	saveLocalLyricsFn     = saveLocalLyrics
+	recordSearchOutcomeFn = recordSearchOutcome
+	printStatsFn          = printStats
+)
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -23,16 +31,18 @@ func main() {
 func run(args []string) int {
 	fs := flag.NewFlagSet("lyrics-fetch-go", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	debug := fs.Bool("debug", false, "")
-	clearCache := fs.Bool("clear-cache", false, "")
-	noSpotify := fs.Bool("no-spotify", false, "")
-	ignoreLocalCache := fs.Bool("ignore-local-cache", false, "")
-	artist := fs.String("artist", "", "")
-	title := fs.String("title", "", "")
-	album := fs.String("album", "", "")
-	duration := fs.Float64("duration", 0, "")
-	trackID := fs.String("track-id", "", "")
-	deepSearch := fs.Bool("deep-search", false, "")
+	debug := fs.Bool("debug", false, "enable debug logging")
+	clearCache := fs.Bool("clear-cache", false, "remove cache directory")
+	statsMode := fs.Bool("stats", false, "show provider and cache statistics")
+	dryRun := fs.Bool("dry-run", false, "fetch candidates without saving cache")
+	noSpotify := fs.Bool("no-spotify", false, "use provided artist/title without playerctl")
+	ignoreLocalCache := fs.Bool("ignore-local-cache", false, "skip local cache shortcut")
+	artist := fs.String("artist", "", "track artist")
+	title := fs.String("title", "", "track title")
+	album := fs.String("album", "", "track album")
+	duration := fs.Float64("duration", 0, "track duration in seconds")
+	trackID := fs.String("track-id", "", "track id")
+	deepSearch := fs.Bool("deep-search", false, "try extra provider queries")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -42,6 +52,13 @@ func run(args []string) int {
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "lyrics-fetch-go: cache limpo")
+		return 0
+	}
+	if *statsMode {
+		if err := printStatsFn(os.Stdout, loadIndex()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		return 0
 	}
 
@@ -57,9 +74,12 @@ func run(args []string) int {
 	}
 	debugLog(*debug, "track", fmt.Sprintf("%s - %s", track.Artist, track.Title))
 
-	if !*ignoreLocalCache {
-		if existingPath, _, ok := findLocalLRC(track); ok {
+	if !*ignoreLocalCache && !*dryRun {
+		if existingPath, _, ok := findLocalLRCFn(track); ok {
 			debugLog(*debug, "local_exists", existingPath)
+			if err := recordSearchOutcomeFn(track, "found", "local-cache", existingPath, "", []string{existingPath}); err != nil {
+				debugLog(*debug, "index_error", err)
+			}
 			return 0
 		}
 	}
@@ -67,14 +87,24 @@ func run(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), globalTimeout)
 	defer cancel()
 
-	cand, err := fetchLyrics(ctx, track, *debug, *deepSearch)
+	cand, err := fetchLyricsFn(ctx, track, *debug, *deepSearch)
 	if err != nil {
 		if err == errNotFound {
+			if !*dryRun {
+				if recErr := recordSearchOutcomeFn(track, "not_found", "", "", "", nil); recErr != nil {
+					debugLog(*debug, "index_error", recErr)
+				}
+			}
 			fmt.Fprintln(os.Stderr, "result: not found")
 			return 0
 		}
 		if err == errTimeout {
 			debugLog(*debug, "lrclib", "timeout, not caching negative result")
+			if !*dryRun {
+				if recErr := recordSearchOutcomeFn(track, "timeout", "", "", "", nil); recErr != nil {
+					debugLog(*debug, "index_error", recErr)
+				}
+			}
 			fmt.Fprintln(os.Stderr, "result: not found")
 			return 0
 		}
@@ -82,10 +112,25 @@ func run(args []string) int {
 		return 1
 	}
 	if cand == nil || cand.Text == "" {
+		if !*dryRun {
+			if recErr := recordSearchOutcomeFn(track, "not_found", "", "", "", nil); recErr != nil {
+				debugLog(*debug, "index_error", recErr)
+			}
+		}
 		fmt.Fprintln(os.Stderr, "result: not found")
 		return 0
 	}
-	saved, err := saveLocalLyrics(track, cand.Text, cand.Provider, cand.SourceID)
+	if *dryRun {
+		debugLog(*debug, "dry_run_winner", map[string]any{
+			"provider":  cand.Provider,
+			"source_id": cand.SourceID,
+			"status":    "found",
+		})
+		fmt.Fprintf(os.Stderr, "dry-run winner: provider=%s source_id=%s\n", cand.Provider, cand.SourceID)
+		fmt.Fprintln(os.Stderr, "dry-run: not saving .lrc")
+		return 0
+	}
+	saved, err := saveLocalLyricsFn(track, cand.Text, cand.Provider, cand.SourceID)
 	if err != nil {
 		debugLog(*debug, "local_save_error", err)
 		return 1

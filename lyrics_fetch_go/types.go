@@ -15,10 +15,14 @@ type Candidate struct {
 }
 
 type IndexEntry struct {
-	Artist    string   `json:"artist"`
-	Title     string   `json:"title"`
-	Provider  string   `json:"provider"`
-	SourceID  string   `json:"source_id,omitempty"`
-	UpdatedAt int64    `json:"updated_at"`
-	Files     []string `json:"files"`
+	Artist          string   `json:"artist"`
+	Title           string   `json:"title"`
+	Provider        string   `json:"provider,omitempty"`
+	SourceID        string   `json:"source_id,omitempty"`
+	CreatedAt       int64    `json:"created_at,omitempty"`
+	UpdatedAt       int64    `json:"updated_at,omitempty"`
+	DurationMs      int      `json:"duration_ms,omitempty"`
+	Status          string   `json:"status,omitempty"`
+	RejectionReason string   `json:"rejection_reason,omitempty"`
+	Files           []string `json:"files,omitempty"`
 }

@@ -17,7 +17,7 @@ Responsabilidades:
 Renderiza `.lrc` local válido acompanhando a posição do Spotify.
 
 ### lyrics-fetch-go
-Busca letras sincronizadas, valida o cache local antes de reutilizá-lo e salva `.lrc` com escrita atômica.
+Busca letras sincronizadas, valida o cache local antes de reutilizá-lo, expõe `--stats`/`--dry-run` para diagnóstico e salva `.lrc` com escrita atômica.
 
 Providers:
 1. LRCLIB
