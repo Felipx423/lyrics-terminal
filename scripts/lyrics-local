@@ -80,6 +80,12 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
                 lib.render_message("Lyrics not found", [str(path)])
                 time.sleep(4)
                 return 0
+            reason = lib.local_lrc_invalid_reason(track, text)
+            if reason:
+                lib.debug_log("local_lrc", f"invalid {reason}")
+                lib.render_message("Invalid .lrc", [str(path)])
+                time.sleep(4)
+                return 0
             lines, offset_ms = lib.parse_lrc_text(text)
             if not lines:
                 lib.render_message("Invalid .lrc", [str(path)])
@@ -103,8 +109,10 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
 
         lib.debug_log("track", f"{track.artist} - {track.title}")
 
-        path, text = lib.load_local_lrc_text(track)
+        path, text, reason = lib.load_local_lrc_text_with_reason(track)
         if not path or not text:
+            if reason:
+                lib.debug_log("local_lrc", f"invalid {reason}")
             lib.render_message(
                 "Lyrics not found",
                 [
@@ -118,6 +126,7 @@ def run_terminal(debug: bool = False, file_path: str | None = None) -> int:
 
         lines, offset_ms = lib.parse_lrc_text(text)
         if not lines:
+            lib.debug_log("local_lrc", "invalid no_timestamp")
             lib.render_message("Invalid .lrc", [str(path)])
             time.sleep(4)
             return 0

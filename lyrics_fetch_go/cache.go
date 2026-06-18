@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
@@ -56,6 +57,28 @@ func saveIndex(index map[string]IndexEntry) error {
 	return os.Rename(tmp, indexPath)
 }
 
+func atomicWriteFile(path string, data []byte) error {
+	if err := ensureDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
 func localLyricsPaths(track Track) []string {
 	exact := filepath.Join(localDir, exactBaseName(track)+".lrc")
 	normalized := filepath.Join(localDir, normalizedBaseName(track)+".lrc")
@@ -65,14 +88,129 @@ func localLyricsPaths(track Track) []string {
 	return []string{exact, normalized}
 }
 
-func findLocalLRC(track Track) (string, string, bool) {
-	for _, path := range localLyricsPaths(track) {
-		if _, err := os.Stat(path); err == nil {
-			if data, err := os.ReadFile(path); err == nil {
-				return path, string(data), true
-			}
-			return path, "", true
+func countCJKChars(text string) int {
+	count := 0
+	for _, r := range text {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+			count++
 		}
+	}
+	return count
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func trackPrefersPortuguese(track Track) bool {
+	text := normalizeText(track.Artist + " " + track.Title)
+	hints := []string{
+		"djavan",
+		"chico buarque",
+		"caetano veloso",
+		"gilberto gil",
+		"skank",
+		"lagum",
+		"liniker",
+		"djonga",
+		"baco exu do blues",
+		"vanessa da mata",
+		"jorge vercillo",
+		"marisa monte",
+		"gal costa",
+		"tim maia",
+	}
+	for _, hint := range hints {
+		if strings.Contains(text, hint) {
+			return true
+		}
+	}
+	if strings.ContainsAny(track.Artist+track.Title, "ãõáéíóúçâêôà") {
+		return true
+	}
+	ptMarkers := []string{" ao vivo", " feat ", " participacao", " participação", " pra ", " nao ", " não ", " teu ", " tua ", " seu ", " sua "}
+	for _, marker := range ptMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func trackLooksLatinScript(track Track) bool {
+	label := track.Artist + track.Title
+	if countCJKChars(label) > 0 {
+		return false
+	}
+	for _, r := range label {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func localLRCInvalidReason(track Track, text string) string {
+	if strings.TrimSpace(text) == "" {
+		return "empty"
+	}
+	lines, _ := parseLRCText(text)
+	if len(lines) == 0 {
+		return "no_timestamp"
+	}
+	useful := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if isUsefulLyricLine(line[1]) {
+			useful = append(useful, strings.TrimSpace(line[1]))
+		}
+	}
+	if len(useful) == 0 {
+		return "no_usable_lyric_lines"
+	}
+	combined := strings.Join(useful, " ")
+	cjkChars := countCJKChars(combined)
+	alphaChars := 0
+	for _, r := range combined {
+		if unicode.IsLetter(r) {
+			alphaChars++
+		}
+	}
+	if cjkChars >= 4 && cjkChars >= maxInt(4, alphaChars*15/100) && (trackPrefersPortuguese(track) || trackLooksLatinScript(track)) {
+		return "cjk_suspect"
+	}
+	return ""
+}
+
+func quarantineBadLRC(path string) string {
+	badDir := filepath.Join(localDir, "bad")
+	if err := ensureDir(badDir); err != nil {
+		return ""
+	}
+	target := filepath.Join(badDir, filepath.Base(path)+"."+fmt.Sprintf("%d", time.Now().Unix())+".bad")
+	if err := os.Rename(path, target); err != nil {
+		return ""
+	}
+	return target
+}
+
+func inspectLocalLRC(track Track) (string, string, bool) {
+	for _, path := range localLyricsPaths(track) {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			quarantineBadLRC(path)
+			continue
+		}
+		if reason := localLRCInvalidReason(track, string(data)); reason != "" {
+			quarantineBadLRC(path)
+			continue
+		}
+		return path, string(data), true
 	}
 	targetKey := trackKey(track)
 	entries, err := os.ReadDir(localDir)
@@ -90,11 +228,23 @@ func findLocalLRC(track Track) (string, string, bool) {
 		stem := strings.TrimSuffix(name, ".lrc")
 		if normalizeText(stem) == targetKey {
 			path := filepath.Join(localDir, name)
-			data, _ := os.ReadFile(path)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				quarantineBadLRC(path)
+				continue
+			}
+			if reason := localLRCInvalidReason(track, string(data)); reason != "" {
+				quarantineBadLRC(path)
+				continue
+			}
 			return path, string(data), true
 		}
 	}
 	return "", "", false
+}
+
+func findLocalLRC(track Track) (string, string, bool) {
+	return inspectLocalLRC(track)
 }
 
 func saveLocalLyrics(track Track, lrcText string, provider string, sourceID string) ([]string, error) {
@@ -104,11 +254,11 @@ func saveLocalLyrics(track Track, lrcText string, provider string, sourceID stri
 	exact := filepath.Join(localDir, exactBaseName(track)+".lrc")
 	normalized := filepath.Join(localDir, normalizedBaseName(track)+".lrc")
 	saved := []string{exact}
-	if err := os.WriteFile(exact, []byte(lrcText), 0o644); err != nil {
+	if err := atomicWriteFile(exact, []byte(lrcText)); err != nil {
 		return nil, err
 	}
 	if normalized != exact {
-		if err := os.WriteFile(normalized, []byte(lrcText), 0o644); err != nil {
+		if err := atomicWriteFile(normalized, []byte(lrcText)); err != nil {
 			return nil, err
 		}
 		saved = append(saved, normalized)

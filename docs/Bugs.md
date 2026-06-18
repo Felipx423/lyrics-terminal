@@ -21,3 +21,14 @@ Quando o Spotify entra em `paused`, o comando `lyrics` agora mantém a última l
 
 Prioridade:
 Alta.
+
+## cache local aceita `.lrc` inválido
+
+Status:
+Resolvido.
+
+Descrição:
+O comando principal e o fetcher agora validam o `.lrc` local antes de usá-lo. Arquivos vazios, sem timestamp parseável ou com conteúdo claramente incompatível são quarentenados em `~/.local/share/lyrics/bad/` e tratados como cache miss, forçando novo fetch.
+
+Prioridade:
+Alta.

@@ -4,7 +4,10 @@ import importlib.util
 from importlib.machinery import SourceFileLoader
 import types
 import unittest
+import tempfile
 from pathlib import Path
+
+import lyricslib as real_lib
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "lyrics"
@@ -53,6 +56,17 @@ class FakeLib:
 
     def find_local_lrc(self, track):
         return self.local_paths.get(track.title)
+
+    def load_local_lrc_text_with_reason(self, track):
+        value = self.local_paths.get(track.title)
+        if isinstance(value, tuple):
+            return value
+        if value:
+            return value, "[00:00.000]line one\n", None
+        return None, None, None
+
+    def local_lrc_invalid_reason(self, track, text):
+        return None
 
     def render_message(self, title: str, lines: list[str]) -> None:
         self.calls.append(("render_message", title))
@@ -117,6 +131,13 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertIn(("fetch_spawned", "pid=4321"), debug_logs)
         self.assertIn(("no_output_timeout", "10s"), debug_logs)
 
+    def test_runtime_flags_propagate_no_output_timeout(self) -> None:
+        module = load_script_module()
+
+        flags = module.runtime_flags(True, 15.0)
+
+        self.assertEqual(flags, ["--debug", "--run", "--no-output-timeout", "15"])
+
     def test_stream_no_output_renders_wait_message(self) -> None:
         module = load_script_module()
         track = types.SimpleNamespace(artist="Artist", title="Silent Song", album="", duration_ms=180000, track_id="1")
@@ -143,6 +164,30 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertIn("Buscando letra...", render_messages)
         debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
         self.assertIn(("sptlrx_no_output", "10s_without_output"), debug_logs)
+
+    def test_wait_helper_handles_pause_before_local_lrc(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Paused Song", album="", duration_ms=180000, track_id="1")
+        other = types.SimpleNamespace(artist="Artist", title="Paused Song (live)", album="", duration_ms=180000, track_id="2")
+        fake_lib = FakeLib(
+            statuses=["paused", "paused"],
+            tracks=[track, other],
+            local_paths={},
+        )
+        slept: list[float] = []
+
+        module.lib = fake_lib
+        module.time.sleep = lambda seconds: slept.append(seconds)
+
+        status, fresh = module.wait_for_local_lrc_or_track_change(track)
+
+        self.assertEqual(status, "track_changed")
+        self.assertIsNotNone(fresh)
+        self.assertIn(module.POLL_INTERVAL_SECONDS, slept)
+        debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
+        self.assertIn(("spotify_paused", "lyrics"), debug_logs)
+        self.assertIn(("paused_wait", "lyrics"), debug_logs)
+        self.assertIn(("track_changed_while_paused", "Artist - Paused Song -> Artist - Paused Song (live)"), debug_logs)
 
     def test_wait_helper_detects_local_lrc(self) -> None:
         module = load_script_module()
@@ -247,6 +292,23 @@ class LyricsPlaylistTest(unittest.TestCase):
         debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
         self.assertIn(("track_changed", "Artist One - First Song -> Artist Two - Second Song"), debug_logs)
         self.assertIn(("pipeline_restart", "restarting_pipeline"), debug_logs)
+
+    def test_find_local_lrc_rejects_cjk_mismatch(self) -> None:
+        track = real_lib.TrackInfo(artist="Aimar", title="LINGERIE", album="", duration_ms=0, track_id="")
+        with tempfile.TemporaryDirectory() as tmp:
+            original_dir = real_lib.LOCAL_DIR
+            try:
+                real_lib.LOCAL_DIR = Path(tmp)
+                bad_path = real_lib.LOCAL_DIR / "Aimar - LINGERIE.lrc"
+                bad_path.write_text("[00:00.000]土砂降りの中 take a trip\n", encoding="utf-8")
+
+                found = real_lib.find_local_lrc(track)
+
+                self.assertIsNone(found)
+                quarantined = list((real_lib.LOCAL_DIR / "bad").glob("*.bad"))
+                self.assertTrue(quarantined)
+            finally:
+                real_lib.LOCAL_DIR = original_dir
 
 
 if __name__ == "__main__":

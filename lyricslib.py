@@ -32,6 +32,7 @@ FONT_SIZE = "32"
 OFFSET_TAG_RE = re.compile(r"^\[offset:([+-]?\d+)\]\s*$", re.IGNORECASE)
 LRC_LINE_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\](.*)")
 META_LINE_RE = re.compile(r"^\[(ar|ti|al|by|offset|re|ve|length|la|language):", re.IGNORECASE)
+CJK_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
 NOISE_PATTERNS = [
     r"\((?:feat\.?|ft\.?|with|remaster(?:ed)?(?:\s+\d{4})?|live|ao vivo|deluxe|edit|version|mono|stereo|radio edit|instrumental|acoustic|acústico|karaoke|demo)[^)]*\)",
     r"\[(?:feat\.?|ft\.?|with|remaster(?:ed)?(?:\s+\d{4})?|live|ao vivo|deluxe|edit|version|mono|stereo|radio edit|instrumental|acoustic|acústico|karaoke|demo)[^\]]*\]",
@@ -243,7 +244,7 @@ def local_lyrics_paths(track: TrackInfo) -> list[Path]:
     return paths
 
 
-def find_local_lrc(track: TrackInfo) -> Path | None:
+def _candidate_local_lrc(track: TrackInfo) -> Path | None:
     for path in local_lyrics_paths(track):
         if path.exists():
             return path
@@ -253,6 +254,71 @@ def find_local_lrc(track: TrackInfo) -> Path | None:
             if normalize_text(path.stem) == target_key:
                 return path
     return None
+
+
+def count_cjk_chars(text: str) -> int:
+    return len(CJK_CHAR_RE.findall(text or ""))
+
+
+def track_looks_latin_script(track: TrackInfo) -> bool:
+    label = f"{track.artist}{track.title}"
+    if count_cjk_chars(label):
+        return False
+    return any(ch.isalpha() for ch in label)
+
+
+def local_lrc_invalid_reason(track: TrackInfo, text: str) -> str | None:
+    if not text or not text.strip():
+        return "empty"
+
+    lines, _ = parse_lrc_text(text)
+    if not lines:
+        return "no_timestamp"
+
+    useful_lines = [line_text.strip() for _, line_text in lines if is_useful_lyric_line(line_text)]
+    if not useful_lines:
+        return "no_usable_lyric_lines"
+
+    combined = " ".join(useful_lines)
+    cjk_chars = count_cjk_chars(combined)
+    alpha_chars = sum(1 for ch in combined if ch.isalpha())
+    if cjk_chars >= 4 and cjk_chars >= max(4, int(alpha_chars * 0.15)) and (track_prefers_portuguese(track) or track_looks_latin_script(track)):
+        return "cjk_suspect"
+
+    return None
+
+
+def quarantine_bad_local_lrc(path: Path, reason: str) -> Path | None:
+    try:
+        bad_dir = LOCAL_DIR / "bad"
+        bad_dir.mkdir(parents=True, exist_ok=True)
+        target = bad_dir / f"{path.name}.{int(time.time())}.bad"
+        path.rename(target)
+        return target
+    except Exception:
+        return None
+
+
+def inspect_local_lrc(track: TrackInfo) -> tuple[Path | None, str | None, str | None]:
+    path = _candidate_local_lrc(track)
+    if not path:
+        return None, None, None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        quarantine_bad_local_lrc(path, "unreadable")
+        return None, None, "unreadable"
+
+    reason = local_lrc_invalid_reason(track, text)
+    if reason:
+        quarantine_bad_local_lrc(path, reason)
+        return None, None, reason
+    return path, text, None
+
+
+def find_local_lrc(track: TrackInfo) -> Path | None:
+    path, _, _ = inspect_local_lrc(track)
+    return path
 
 
 def parse_lrc_text(text: str) -> tuple[list[tuple[int, str]], int]:
@@ -453,13 +519,12 @@ def save_local_lyrics(track: TrackInfo, lrc_text: str, provider: str, source_id:
 
 
 def load_local_lrc_text(track: TrackInfo) -> tuple[Path | None, str | None]:
-    path = find_local_lrc(track)
-    if not path:
-        return None, None
-    try:
-        return path, path.read_text(encoding="utf-8")
-    except Exception:
-        return path, None
+    path, text, _ = inspect_local_lrc(track)
+    return path, text
+
+
+def load_local_lrc_text_with_reason(track: TrackInfo) -> tuple[Path | None, str | None, str | None]:
+    return inspect_local_lrc(track)
 
 
 def terminate_process(proc: subprocess.Popen[Any] | None) -> None:

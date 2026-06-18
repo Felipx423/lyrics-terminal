@@ -18,3 +18,13 @@ Motivo:
 
 Status:
 Ativo.
+
+## Validar e quarentenar cache local inválido
+
+Motivo:
+- `.lrc` existente não pode ser aceito só por existir;
+- cache ruim precisa voltar a ser cache miss para permitir novo fetch;
+- o arquivo suspeito deve ser preservado em quarentena para debug.
+
+Status:
+Ativo.

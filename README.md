@@ -10,10 +10,12 @@ Sistema de letras sincronizadas para Spotify no Linux.
 
 ## Fluxo
 
-1. `lyrics` verifica se já existe `.lrc`.
-2. Se existir, usa `lyrics-local`.
+1. `lyrics` verifica se já existe `.lrc` local válido.
+2. Se existir e passar na validação, usa `lyrics-local`.
 3. Se não existir, usa `sptlrx pipe`.
 4. Em background, chama `lyrics-fetch-go` para tentar baixar a letra.
+
+Arquivos `.lrc` suspeitos são movidos para `~/.local/share/lyrics/bad/` e tratados como cache miss.
 
 ## Pastas
 

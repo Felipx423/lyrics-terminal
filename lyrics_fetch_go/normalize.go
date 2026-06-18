@@ -186,6 +186,31 @@ func hasSyncedLines(text string) bool {
 	return len(lines) > 0
 }
 
+func isUsefulLyricLine(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	lowered := strings.ToLower(text)
+	if lowered == "..." || lowered == "♪" || lowered == "♫" {
+		return false
+	}
+	if strings.HasPrefix(lowered, "[") && strings.Contains(lowered, "]") {
+		return false
+	}
+	for _, marker := range []string{"no lyrics", "not found", "offline", "error", "failed"} {
+		if strings.Contains(lowered, marker) {
+			return false
+		}
+	}
+	for _, r := range text {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
+}
+
 func buildQuery(title, artist string) string {
 	return strings.TrimSpace(cleanTrackTitle(title) + " " + cleanArtistName(artist))
 }
