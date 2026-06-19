@@ -1,145 +1,522 @@
 # Provider Improvement Plan
 
+> Status: Documento estratégico  
+> Última revisão: 2026-06-19  
+> Fonte de verdade: código do repositório, métricas locais e decisões registradas  
+> Documento relacionado: [[Provider-validation]]
+
 ## Objetivo
 
-Avaliar fontes de letras para o `lyrics-fetch-go` com foco em:
+Definir como o projeto avalia, prioriza, adiciona ou remove providers de letras sincronizadas.
 
-- maior cobertura de letras sincronizadas;
-- menor risco de salvar `.lrc` errado;
-- boa viabilidade para CLI;
-- boa observabilidade via `--stats` e `--dry-run`.
+O objetivo não é ter o maior número possível de providers.
 
-## Estado atual do fetcher
+O objetivo é melhorar cobertura sem aumentar de forma irresponsável:
 
-O fetcher já usa esta ordem:
+- letras erradas;
+    
+- cache contaminado;
+    
+- dependências frágeis;
+    
+- scraping instável;
+    
+- manutenção desnecessária;
+    
+- falhas difíceis de diagnosticar.
+    
 
-1. LRCLIB
-2. NetEase via mapa
-3. NetEase search
-4. `syncedlyrics` CLI
+## Decisão Atual
 
-O código atual só salva `.lrc` quando há timestamp real. Isso é o ponto certo para manter segurança.
+Nenhum provider novo deve ser implementado durante a fase **v0.6.0 — Real World Testing**.
 
-## Critérios de avaliação
+Antes de considerar Musixmatch, Megalobiz ou qualquer outra fonte, o projeto precisa:
 
-- `sync`: entrega letra com timestamps reais.
-- `plain`: entrega apenas texto.
-- `CLI`: dá para integrar de forma estável em um binário de terminal.
-- `risk`: chance de letra errada, scraping frágil ou bloqueio.
-- `effort`: esforço esperado de implementação/manutenção.
-- `veredito`: usar, não usar, ou usar só como fallback manual.
+1. investigar casos de letra errada da issue #1;
+    
+2. registrar proveniência de candidatos aceitos;
+    
+3. coletar dados reais de falha e sucesso;
+    
+4. diferenciar falta de cobertura de falha técnica;
+    
+5. garantir que cache não perpetue letras semanticamente erradas;
+    
+6. avaliar manutenção, estabilidade e viabilidade da integração.
+    
 
-## Avaliação por fonte
+Provider novo é hipótese de pesquisa, não tarefa automática.
+
+## Providers Atuais
+
+A ordem deve ser confirmada em `lyrics_fetch_go/providers.go`.
+
+|Provider|Papel atual|Risco principal|
+|---|---|---|
+|LRCLIB|Fonte principal|Cobertura limitada ou candidatos próximos|
+|NetEase Map|Busca por mapeamento|Dados inconsistentes ou versões alternativas|
+|NetEase Search|Busca e ranking por texto|Matching parcial e falsos positivos|
+|syncedlyrics CLI|Fallback agregador|Metadados incompletos e comportamento dependente de backend|
+
+## Regras de Aceitação
+
+Um provider só é útil se o projeto puder responder:
+
+- qual faixa foi buscada;
+    
+- qual candidato foi encontrado;
+    
+- por que foi aceito;
+    
+- por que candidatos alternativos foram rejeitados;
+    
+- qual provider venceu;
+    
+- o que foi salvo no cache;
+    
+- como reproduzir ou investigar uma falha.
+    
+
+Resultado sincronizado não é sinônimo de resultado correto.
+
+## Critérios para Avaliar Provider
+
+Todo provider novo deve ser avaliado nos critérios abaixo.
+
+### Sincronização
+
+Pergunta:
+
+> O provider fornece timestamps utilizáveis e confiáveis?
+
+Resultados sem timestamps não devem virar `.lrc` automático.
+
+### Identidade Musical
+
+Pergunta:
+
+> O provider fornece metadados suficientes para confirmar artista, título, álbum, versão e duração?
+
+Quanto menos metadados existir, maior deve ser a exigência de validação.
+
+### Cobertura
+
+Pergunta:
+
+> O provider resolve casos reais que os providers atuais não resolvem?
+
+Cobertura precisa ser medida com amostras reais, não estimada por fama do serviço.
+
+### Qualidade
+
+Pergunta:
+
+> O provider reduz falsos negativos sem aumentar falsos positivos?
+
+Uma fonte que encontra mais letras, mas erra artista ou versão, pode piorar o projeto.
+
+### Estabilidade
+
+Pergunta:
+
+> A integração é previsível, documentada e sustentável?
+
+Evitar dependência que só funciona por scraping frágil ou comportamento não documentado.
+
+### Diagnóstico
+
+Pergunta:
+
+> O provider permite registrar source_id, metadados, duração, score e motivo de aceitação?
+
+Provider que não pode ser auditado deve ser tratado como fallback de risco elevado.
+
+### Manutenção
+
+Pergunta:
+
+> A integração adiciona complexidade proporcional ao ganho real?
+
+Não adicionar biblioteca, CLI externa ou camada de scraping sem evidência de benefício.
+
+## Estado Atual de Métricas
+
+O projeto já possui:
+
+- estatísticas de cache e índice;
+    
+- análise de falhas persistidas;
+    
+- eventos estruturados por faixa no launcher;
+    
+- logs humanos no modo `--debug`;
+    
+- validação e quarentena de cache local;
+    
+- comandos de diagnóstico como `--stats` e `--analyze-failures`.
+    
+
+O projeto ainda não possui métricas completas e confiáveis por provider individual.
+
+Antes de comparar providers com segurança, o fetcher precisa registrar para cada candidato:
+
+```text
+provider
+source_id
+target track metadata
+candidate metadata
+score
+match type
+accepted
+rejection reasons
+duration delta
+cache provenance
+```
+
+## Avaliação dos Providers Atuais
 
 ### LRCLIB
 
-- `sync`: sim.
-- `CLI`: sim, via API HTTP direta.
-- `risk`: baixo a médio.
-- `effort`: baixo.
-- `limitações`: cobertura depende do catálogo disponível; ainda pode haver candidatos errados se a checagem for frouxa.
-- `veredito`: usar.
+Decisão atual: manter.
 
-Observação:
-- já é uma das melhores bases para o projeto porque retorna `.lrc` sincronizado e encaixa bem no fluxo atual.
+Pontos positivos:
 
-### NetEase
+- encaixa bem em busca de letras sincronizadas;
+    
+- pode retornar metadados úteis;
+    
+- já está integrado ao fluxo principal.
+    
 
-- `sync`: sim.
-- `CLI`: sim, via HTTP.
-- `risk`: médio.
-- `effort`: médio.
-- `limitações`: a busca por ID/mapa e por texto pode falhar em artistas não chineses, versões ao vivo e remixes; matching precisa ser conservador.
-- `veredito`: usar.
+Riscos:
 
-Observação:
-- hoje ele funciona como boa segunda camada para casos que LRCLIB não cobre.
+- cobertura pode ser limitada;
+    
+- candidatos próximos ainda precisam passar por validação forte;
+    
+- versão errada ou faixa parecida não deve ser aceita apenas por título semelhante.
+    
+
+Prioridade:
+
+- manter como provider principal;
+    
+- melhorar diagnóstico de candidatos antes de mudar regra de matching.
+    
+
+---
+
+### NetEase Map
+
+Decisão atual: manter e observar.
+
+Pontos positivos:
+
+- pode resolver faixas que não aparecem em outras fontes;
+    
+- busca por identificador pode reduzir ambiguidade em alguns casos.
+    
+
+Riscos:
+
+- mapeamento pode apontar para versão diferente;
+    
+- dados podem variar entre catálogo local e Spotify;
+    
+- precisa de evidência de correspondência antes de salvar cache.
+    
+
+Prioridade:
+
+- coletar métricas de sucesso e rejeição;
+    
+- investigar casos de mismatch.
+    
+
+---
+
+### NetEase Search
+
+Decisão atual: manter com cautela.
+
+Pontos positivos:
+
+- aumenta chance de encontrar cobertura;
+    
+- permite ranking de múltiplos candidatos.
+    
+
+Riscos:
+
+- título curto e artista parcial aumentam falsos positivos;
+    
+- score alto não deve substituir validação final;
+    
+- versões live, remix e edit exigem atenção.
+    
+
+Prioridade:
+
+- registrar candidatos e scores;
+    
+- endurecer critérios somente após evidência real.
+    
+
+---
 
 ### syncedlyrics CLI
 
-- `sync`: depende do provider consultado.
-- `plain`: sim, e isso é importante.
-- `CLI`: sim, já existe.
-- `risk`: médio.
-- `effort`: baixo, porque já está pronto.
-- `limitações`: como agregador, o comportamento depende dos backends configurados; alguns backends retornam texto sem timestamps e não devem virar `.lrc`.
-- `veredito`: usar como fallback, com política estrita para só salvar quando houver timestamps.
+Decisão atual: manter apenas como fallback.
 
-Observação:
-- o pacote documenta providers como Musixmatch, LRCLIB, NetEase, Megalobiz e Genius, mas também avisa quando algo está quebrado ou plain-only.
+Pontos positivos:
 
-### Genius / SwagLyrics
+- pode ampliar cobertura por agregar fontes;
+    
+- já existe no ambiente do projeto;
+    
+- funciona como alternativa quando providers diretos falham.
+    
 
-- `sync`: normalmente não; é majoritariamente texto.
-- `plain`: sim.
-- `CLI`: sim, mas o fluxo é mais próximo de um app de texto/browser do que de um gerador de `.lrc`.
-- `risk`: alto.
-- `effort`: médio.
-- `limitações`: exige atenção ao ToS da Genius; o próprio SwagLyrics avisa para checar os termos de uso. Não é uma base confiável para salvar `.lrc` sincronizado.
-- `veredito`: usar só como fallback manual, nunca como fonte confiável de `.lrc`.
+Riscos:
 
-### Letras.mus.br
+- comportamento depende de backend;
+    
+- pode retornar letra sem metadados suficientes;
+    
+- pode retornar texto sem timestamps;
+    
+- não deve salvar resultado apenas porque contém timestamps.
+    
 
-- `sync`: em geral texto, não um contrato público estável de `.lrc`.
-- `plain`: sim.
-- `CLI`: não vi API pública oficial adequada para integração direta no audit.
-- `risk`: alto.
-- `effort`: alto.
-- `limitações`: tende a depender de scraping ou integração não documentada; isso cria fragilidade técnica e risco operacional.
-- `veredito`: não usar por enquanto.
+Prioridade:
 
-### Outros nomes relevantes
+- manter política estrita de validação;
+    
+- registrar origem quando possível;
+    
+- não confiar cegamente em saída agregada.
+    
 
-- Musixmatch:
-  - `sync`: sim;
-  - `CLI`: viável via `syncedlyrics`;
-  - `risk`: médio a alto por questões de acesso/licença;
-  - `veredito`: investigar como próximo candidato real de cobertura.
+## Candidatos para Pesquisa Futura
 
-- Megalobiz:
-  - `sync`: pode existir em alguns casos;
-  - `CLI`: viável via `syncedlyrics`;
-  - `risk`: médio;
-  - `veredito`: fallback secundário, abaixo de LRCLIB/NetEase.
+### Musixmatch
 
-- Deezer:
-  - `sync`: o próprio `syncedlyrics` marca como não funcionando no momento;
-  - `veredito`: não priorizar.
+Status: candidato de pesquisa.
 
-## Métricas que esta branch cria
+Possível valor:
 
-Com `lyrics-fetch-go --stats` e `lyrics-fetch-go --dry-run --debug`, já dá para medir:
+- pode aumentar cobertura de letras sincronizadas.
+    
 
-- quantidade de `.lrc` locais;
-- quantidade de arquivos em quarentena;
-- quantidade de entradas negativas no índice;
-- origem dos últimos resultados;
-- taxa aproximada de sucesso;
-- vencedor provável sem escrever cache.
+Riscos:
 
-Isso cria a base para comparar qualquer provider novo antes de implementá-lo.
+- integração, acesso e manutenção precisam ser avaliados;
+    
+- cobertura maior não compensa se aumentar falsos positivos;
+    
+- não deve entrar sem evidência de ganho em casos reais.
+    
 
-## Recomendação
+Condição para avançar:
 
-### Próximo provider a implementar
+- comparar amostra real de faixas sem cobertura;
+    
+- validar metadados e sincronização;
+    
+- definir forma sustentável e auditável de integração.
+    
 
-**Musixmatch**, mas somente se houver uma integração compatível com o projeto e sem transformar o fluxo em scraping frágil.
+---
+
+### Megalobiz
+
+Status: fallback secundário de pesquisa.
+
+Possível valor:
+
+- pode oferecer letras sincronizadas em alguns casos.
+    
+
+Riscos:
+
+- cobertura e estabilidade precisam ser verificadas;
+    
+- pode exigir validação mais rígida;
+    
+- não deve ser usado como solução automática para qualquer ausência de letra.
+    
+
+---
+
+### Genius, SwagLyrics e Fontes de Texto
+
+Status: não usar como fonte automática de `.lrc`.
 
 Motivo:
 
-- é um backend com potencial de cobertura alta;
-- já aparece no ecossistema de agregadores de letras sincronizadas;
-- pode aumentar a taxa de sucesso antes de pensarmos em providers mais frágeis.
+- foco principal em letra textual;
+    
+- ausência comum de timestamps;
+    
+- risco de depender de scraping ou comportamento instável;
+    
+- não resolvem, por si só, o problema de sincronização.
+    
 
-### Não implementar agora
+Podem ser considerados apenas em funcionalidades futuras de consulta manual de texto, nunca como fonte automática para cache sincronizado.
 
-- Genius/SwagLyrics como fonte de `.lrc` sincronizado.
-- Letras.mus.br via scraping.
+---
 
-Essas fontes podem servir como fallback manual de texto no futuro, mas não são a melhor próxima etapa para `.lrc`.
+### Letras.mus.br e Fontes Sem API Estável
 
-## Fontes consultadas
+Status: não priorizar.
 
-- [syncedlyrics no PyPI](https://pypi.org/project/syncedlyrics/)
-- [swaglyrics no PyPI](https://pypi.org/project/swaglyrics/)
-- [LRCLIB](https://lrclib.net/)
+Motivo:
+
+- integração pode depender de scraping;
+    
+- manutenção e risco operacional são altos;
+    
+- não há evidência de que resolvam o gargalo atual de letras sincronizadas.
+    
+
+## Processo para Adicionar um Provider
+
+Nenhum provider novo entra sem cumprir as etapas abaixo.
+
+### 1. Identificar Lacuna Real
+
+Registrar faixas que falharam nos providers atuais.
+
+A amostra precisa incluir:
+
+- artista;
+    
+- título;
+    
+- duração;
+    
+- gênero ou idioma;
+    
+- resultado atual;
+    
+- provider já tentado;
+    
+- existência confirmada de letra sincronizada em outra fonte, quando conhecida.
+    
+
+### 2. Fazer Prova de Cobertura
+
+Testar o provider candidato apenas contra a amostra de falhas reais.
+
+Avaliar:
+
+- quantas faixas ele encontra;
+    
+- quantas possuem timestamps;
+    
+- quantas possuem metadados verificáveis;
+    
+- quantas seriam aceitas pelas regras atuais;
+    
+- quantas parecem ambiguidades ou falsos positivos.
+    
+
+### 3. Avaliar Integração
+
+Confirmar:
+
+- forma de acesso;
+    
+- dependências;
+    
+- timeout;
+    
+- tratamento de erro;
+    
+- necessidade de autenticação;
+    
+- confiabilidade;
+    
+- manutenção esperada.
+    
+
+### 4. Projetar Diagnóstico
+
+Antes de integrar, definir:
+
+- campos de log;
+    
+- source_id;
+    
+- metadados de candidato;
+    
+- motivos de rejeição;
+    
+- formato de proveniência no cache;
+    
+- testes de regressão.
+    
+
+### 5. Implementar com Feature Isolada
+
+A implementação deve:
+
+- ficar isolada;
+    
+- ter timeout;
+    
+- não alterar comportamento dos providers existentes sem motivo;
+    
+- não salvar resultado sem validação;
+    
+- ter testes sem rede;
+    
+- permitir desativação simples se necessário.
+    
+
+### 6. Revisar com Dados Reais
+
+Depois de uso real, comparar:
+
+- ganho de cobertura;
+    
+- taxa de timeout;
+    
+- taxa de rejeição;
+    
+- falsos positivos;
+    
+- impacto em manutenção;
+    
+- impacto no cache.
+    
+
+## Critérios para Remover ou Rebaixar Provider
+
+Um provider deve ser rebaixado ou removido quando:
+
+- gera falsos positivos recorrentes;
+    
+- não oferece metadados suficientes;
+    
+- falha com frequência alta;
+    
+- aumenta tempo de resposta sem ganho real;
+    
+- depende de integração frágil;
+    
+- não contribui para cobertura mensurável;
+    
+- torna investigações mais difíceis.
+    
+
+## Regra Final
+
+Não adicionar provider para compensar matching fraco.
+
+Primeiro garantir que o sistema sabe rejeitar uma letra errada.
+
+Depois medir cobertura.
+
+Só então expandir fontes.

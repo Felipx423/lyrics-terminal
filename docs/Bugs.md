@@ -1,34 +1,106 @@
 # Bugs e Problemas
 
-## lyrics encerra ao trocar música
+## Abertos
 
-Status:
-Resolvido.
+### Letras erradas aceitas por provider
 
-Descrição:
-Quando a faixa muda em uma playlist, o comando principal reavalia a faixa atual, emite `track_changed`, limpa a tela e reinicia o pipeline para a nova música. Se o `sptlrx` ficar mudo por tempo configurável (`--no-output-timeout`, padrão 10s), o fluxo entra em espera e continua checando se um `.lrc` apareceu no cache local a cada 2s.
-
-Prioridade:
-Alta.
-
-## lyrics encerra ao pausar Spotify
-
-Status:
-Resolvido.
+Status: Investigando  
+Prioridade: Alta  
+Issue: #1
 
 Descrição:
-Quando o Spotify entra em `paused`, o comando `lyrics` agora mantém a última linha na tela, espera a retomada do `play`, e reinicia o pipeline se a faixa mudar enquanto está pausado.
 
-Prioridade:
-Alta.
+O fetcher pode aceitar uma letra sincronizada com metadados parecidos, mas pertencente a outra faixa, versão ou artista.
 
-## cache local aceita `.lrc` inválido
+Caso conhecido:
 
-Status:
-Resolvido.
+```
+Artista: Ryxn Pablo
+Título: Ainda
+Álbum: Ainda
+Duração: 165 segundos
+Spotify track ID: 38YZseF2ALmg58eVQ9r2mZ
+Resultado: letra errada exibida
+```
+
+Risco:
+
+- a letra errada pode ser salva no cache;
+- execuções futuras podem reutilizar esse cache;
+- um falso positivo é pior que ausência de letra.
+
+Próximos passos:
+
+- registrar provider e candidato vencedor;
+- registrar metadados de candidatos aceitos e rejeitados;
+- identificar se o problema veio de matching permissivo, versão alternativa, cache contaminado ou provider sem metadados confiáveis;
+- criar teste de regressão antes de alterar matching.
+
+---
+
+### Cobertura e lentidão de providers
+
+Status: Coletando dados  
+Prioridade: Média  
+Issues: #2, #4, #5
 
 Descrição:
-O comando principal e o fetcher agora validam o `.lrc` local antes de usá-lo. Arquivos vazios, sem timestamp parseável ou com conteúdo claramente incompatível são quarentenados em `~/.local/share/lyrics/bad/` e tratados como cache miss, forçando novo fetch.
 
-Prioridade:
-Alta.
+Algumas faixas ficam sem retorno do `sptlrx` após 10 segundos, mas podem receber cache local posteriormente.
+
+Casos observados:
+
+- `success_after_fetch`: cache apareceu depois do timeout visual;
+- `no_output_timeout`: nenhum resultado chegou;
+- `track_changed_before_result`: a faixa mudou antes de haver resultado;
+- `interrupted`: runtime encerrado manualmente.
+
+Próximos passos:
+
+- usar métricas estruturadas do launcher;
+- separar ausência real de letra de fetch lento;
+- identificar provider, timeout e padrão de falha quando houver dados suficientes.
+
+## Resolvidos
+
+### Lyrics encerrava ao trocar música
+
+Status: Resolvido
+
+Descrição:
+
+Ao trocar de faixa em uma playlist, o runtime agora detecta a mudança, limpa a tela e reinicia a pipeline para a nova música.
+
+---
+
+### Lyrics encerrava ao pausar Spotify
+
+Status: Resolvido
+
+Descrição:
+
+Quando o Spotify pausa, o runtime mantém a última linha, espera a retomada e reinicia a pipeline se a faixa mudar durante a pausa.
+
+---
+
+### Cache local aceitava `.lrc` inválido
+
+Status: Resolvido
+
+Descrição:
+
+Arquivos vazios, sem timestamps parseáveis, sem linhas úteis ou estruturalmente suspeitos são tratados como cache miss e movidos para:
+
+```
+~/.local/share/lyrics/bad/
+```
+
+---
+
+### Current-terminal dependia visualmente de Kitty
+
+Status: Resolvido
+
+Descrição:
+
+`lyrics --current` agora funciona sem Kitty. Kitty permanece necessário apenas para o modo padrão e `lyrics --kitty`.
