@@ -13,13 +13,18 @@ import (
 )
 
 var (
-	homeDir        = mustHomeDir()
-	localDir       = filepath.Join(homeDir, ".local", "share", "lyrics")
-	cacheDir       = filepath.Join(homeDir, ".cache", "lyrics-terminal")
-	indexPath      = filepath.Join(cacheDir, "index.json")
-	failureLogPath = filepath.Join(cacheDir, "failures.jsonl")
-	mapPaths       = []string{filepath.Join(homeDir, "Music", "lyrics", "lyrics_map.json"), filepath.Join(homeDir, ".config", "spicetify", "CustomApps", "lyrics-plus", "lyrics_map.json")}
+	homeDir          = mustHomeDir()
+	localDir         = filepath.Join(homeDir, ".local", "share", "lyrics")
+	cacheDir         = filepath.Join(homeDir, ".cache", "lyrics-terminal")
+	indexPath        = filepath.Join(cacheDir, "index.json")
+	failureLogPath   = filepath.Join(cacheDir, "failures.jsonl")
+	candidateLogPath = filepath.Join(cacheDir, "candidate_evaluations.jsonl")
+	mapPaths         = []string{filepath.Join(homeDir, "Music", "lyrics", "lyrics_map.json"), filepath.Join(homeDir, ".config", "spicetify", "CustomApps", "lyrics-plus", "lyrics_map.json")}
 )
+
+const validationVersion = "v1"
+
+var candidateEvaluationWriter = appendCandidateEvaluation
 
 func mustHomeDir() string {
 	dir, err := os.UserHomeDir()
@@ -31,6 +36,25 @@ func mustHomeDir() string {
 
 func ensureDir(path string) error {
 	return os.MkdirAll(path, 0o755)
+}
+
+func appendJSONLine(path string, value any) error {
+	if err := ensureDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	return nil
 }
 
 func loadIndex() map[string]IndexEntry {
@@ -61,23 +85,8 @@ func saveIndex(index map[string]IndexEntry) error {
 }
 
 func appendFailureEvent(event FailureEvent) error {
-	if err := ensureDir(cacheDir); err != nil {
-		return err
-	}
 	event.CreatedAt = time.Now().Unix()
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(failureLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		return err
-	}
-	return nil
+	return appendJSONLine(failureLogPath, event)
 }
 
 func loadFailureEvents() []FailureEvent {
@@ -107,6 +116,21 @@ func recordFailureEvent(event FailureEvent) error {
 		return nil
 	}
 	return appendFailureEvent(event)
+}
+
+func appendCandidateEvaluation(event CandidateEvaluationEvent) error {
+	event.CreatedAt = time.Now().Unix()
+	return appendJSONLine(candidateLogPath, event)
+}
+
+func recordCandidateEvaluation(event CandidateEvaluationEvent) error {
+	if event.Event == "" {
+		event.Event = "candidate_evaluated"
+	}
+	if event.Event == "candidate_evaluated" && event.Provider == "" && event.TargetArtist == "" && event.TargetTitle == "" {
+		return nil
+	}
+	return candidateEvaluationWriter(event)
 }
 
 func failureCategoryFromReason(reason string) string {
@@ -191,6 +215,33 @@ func upsertIndexEntry(track Track, patch IndexEntry) error {
 	}
 	if patch.Files != nil {
 		entry.Files = patch.Files
+	}
+	if patch.CandidateArtist != "" {
+		entry.CandidateArtist = patch.CandidateArtist
+	}
+	if patch.CandidateTitle != "" {
+		entry.CandidateTitle = patch.CandidateTitle
+	}
+	if patch.CandidateAlbum != "" {
+		entry.CandidateAlbum = patch.CandidateAlbum
+	}
+	if patch.CandidateDurationMs != 0 {
+		entry.CandidateDurationMs = patch.CandidateDurationMs
+	}
+	if patch.Score != 0 {
+		entry.Score = patch.Score
+	}
+	if patch.CandidateMetadataAvailable {
+		entry.CandidateMetadataAvailable = patch.CandidateMetadataAvailable
+	}
+	if patch.ProvenanceStatus != "" {
+		entry.ProvenanceStatus = patch.ProvenanceStatus
+	}
+	if patch.ValidationVersion != "" {
+		entry.ValidationVersion = patch.ValidationVersion
+	}
+	if patch.AcceptedAt != 0 {
+		entry.AcceptedAt = patch.AcceptedAt
 	}
 	index[key] = entry
 	return saveIndex(index)
@@ -401,30 +452,45 @@ func findLocalLRC(track Track) (string, string, bool) {
 	return inspectLocalLRC(track)
 }
 
-func saveLocalLyrics(track Track, lrcText string, provider string, sourceID string) ([]string, error) {
+func saveLocalLyrics(track Track, cand Candidate) ([]string, error) {
 	if err := ensureDir(localDir); err != nil {
 		return nil, err
 	}
 	exact := filepath.Join(localDir, exactBaseName(track)+".lrc")
 	normalized := filepath.Join(localDir, normalizedBaseName(track)+".lrc")
 	saved := []string{exact}
-	if err := atomicWriteFile(exact, []byte(lrcText)); err != nil {
+	if err := atomicWriteFile(exact, []byte(cand.Text)); err != nil {
 		return nil, err
 	}
 	if normalized != exact {
-		if err := atomicWriteFile(normalized, []byte(lrcText)); err != nil {
+		if err := atomicWriteFile(normalized, []byte(cand.Text)); err != nil {
 			return nil, err
 		}
 		saved = append(saved, normalized)
 	}
+	now := time.Now().Unix()
+	validation := cand.ValidationVersion
+	if validation == "" {
+		validation = validationVersion
+	}
+	provenance := provenanceStatusForCandidate(cand, now)
 	if err := upsertIndexEntry(track, IndexEntry{
-		Artist:     track.Artist,
-		Title:      track.Title,
-		Provider:   provider,
-		SourceID:   sourceID,
-		DurationMs: track.DurationMs,
-		Status:     "found",
-		Files:      saved,
+		Artist:                     track.Artist,
+		Title:                      track.Title,
+		Provider:                   cand.Provider,
+		SourceID:                   cand.SourceID,
+		DurationMs:                 track.DurationMs,
+		Status:                     "found",
+		Files:                      saved,
+		CandidateArtist:            cand.Artist,
+		CandidateTitle:             cand.Title,
+		CandidateAlbum:             cand.Album,
+		CandidateDurationMs:        cand.DurationMs,
+		Score:                      cand.Score,
+		CandidateMetadataAvailable: cand.MetadataAvailable,
+		ProvenanceStatus:           provenance,
+		ValidationVersion:          validation,
+		AcceptedAt:                 now,
 	}); err != nil {
 		return nil, err
 	}
@@ -446,8 +512,16 @@ func recordSearchOutcome(track Track, status, provider, sourceID, reason string,
 	entry.Status = status
 	entry.RejectionReason = reason
 	if status == "found" {
-		entry.Provider = provider
-		entry.SourceID = sourceID
+		if provider != "" && provider != "local-cache" {
+			entry.Provider = provider
+		} else if entry.Provider == "" && provider == "local-cache" {
+			entry.Provider = provider
+		}
+		if sourceID != "" && provider != "local-cache" {
+			entry.SourceID = sourceID
+		} else if entry.SourceID == "" && provider == "local-cache" {
+			entry.SourceID = sourceID
+		}
 		if files != nil {
 			entry.Files = files
 		}
@@ -490,4 +564,79 @@ func sortedIndexEntries(index map[string]IndexEntry) []IndexEntry {
 		return out[i].CreatedAt > out[j].CreatedAt
 	})
 	return out
+}
+
+func provenanceStatusForCandidate(cand Candidate, acceptedAt int64) string {
+	if !cand.MetadataAvailable {
+		return "partial"
+	}
+	if cand.Provider != "" && cand.Artist != "" && cand.Title != "" && cand.ValidationVersion != "" && acceptedAt != 0 {
+		return "complete"
+	}
+	return "partial"
+}
+
+func indexEntryProvenanceStatus(entry IndexEntry) string {
+	if entry.ProvenanceStatus == "complete" {
+		if entry.Provider != "" && entry.CandidateMetadataAvailable && entry.CandidateArtist != "" && entry.CandidateTitle != "" && entry.ValidationVersion != "" && entry.AcceptedAt != 0 {
+			return "complete"
+		}
+		return "partial"
+	}
+	if entry.ProvenanceStatus == "partial" {
+		return "partial"
+	}
+	if entry.ProvenanceStatus == "missing" {
+		return "missing"
+	}
+	if entry.ValidationVersion == "" && entry.AcceptedAt == 0 && entry.CandidateArtist == "" && entry.CandidateTitle == "" && entry.CandidateAlbum == "" && entry.CandidateDurationMs == 0 && entry.Score == 0 && !entry.CandidateMetadataAvailable {
+		return "missing"
+	}
+	if entry.Provider != "" && entry.CandidateMetadataAvailable && entry.CandidateArtist != "" && entry.CandidateTitle != "" && entry.ValidationVersion != "" && entry.AcceptedAt != 0 {
+		return "complete"
+	}
+	if entry.ValidationVersion == "" && entry.AcceptedAt == 0 && !entry.CandidateMetadataAvailable {
+		return "missing"
+	}
+	return "partial"
+}
+
+func indexEntryHasProvenance(entry IndexEntry) bool {
+	return indexEntryProvenanceStatus(entry) != "missing"
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func recordCacheProvenanceMissing(track Track) error {
+	index := loadIndex()
+	entry, ok := index[trackKey(track)]
+	if ok && indexEntryProvenanceStatus(entry) != "missing" {
+		return nil
+	}
+	reasons := []string{"legacy cache entry lacks provenance"}
+	sourceID := ""
+	if ok {
+		sourceID = entry.SourceID
+	}
+	return recordCandidateEvaluation(CandidateEvaluationEvent{
+		Event:            "cache_provenance_missing",
+		Provider:         "local-cache",
+		SourceID:         sourceID,
+		TargetTrackID:    track.TrackID,
+		TargetArtist:     track.Artist,
+		TargetTitle:      track.Title,
+		TargetAlbum:      track.Album,
+		TargetDurationMs: intPtr(track.DurationMs),
+		EvaluationStage:  "cache",
+		Decision:         "cache_reused",
+		CacheReused:      true,
+		ProvenanceStatus: "missing",
+		RejectionReasons: reasons,
+	})
 }

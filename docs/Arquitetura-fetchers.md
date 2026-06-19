@@ -75,6 +75,21 @@ Locais principais:
 ~/.cache/lyrics-terminal/
 ```
 
+O índice de cache em `~/.cache/lyrics-terminal/index.json` guarda a provenance mínima do candidato aceito.
+Quando a entrada não tem `provenance_status` explícito, o estado deve ser interpretado assim:
+
+- `missing`: cache legado ou arquivo `.lrc` sem entrada correspondente no índice;
+- `partial`: cache novo com provenance conhecida, mas com metadados opcionais ausentes;
+- `complete`: cache novo com campos centrais de provenance registrados.
+
+Os diagnósticos estruturados de candidatos são gravados separadamente em:
+
+```
+~/.cache/lyrics-terminal/candidate_evaluations.jsonl
+```
+
+Esse arquivo não substitui `lyrics.log`: o primeiro registra avaliação de candidatos, o segundo registra métricas do launcher e do runtime.
+
 Um `.lrc` é rejeitado quando for, por exemplo:
 
 - vazio;
@@ -114,6 +129,8 @@ cache provenance
 ```
 
 Métricas individuais de provider ainda não são consideradas completas enquanto o projeto não puder atribuir sucesso, rejeição, timeout ou falha a LRCLIB, NetEase Map, NetEase Search e syncedlyrics.
+
+Para `syncedlyrics`, a identidade do candidato pode não vir completa do CLI. Nesse caso, o diagnóstico deve marcar `candidate_metadata_available: false`, `title_match_type: unverified`, `artist_match_type: unverified` e `provenance_status: partial` em vez de copiar metadados da faixa alvo.
 
 ## Regras de Mudança
 

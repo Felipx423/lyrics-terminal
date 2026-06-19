@@ -433,6 +433,10 @@ Runtime logs are written to:
 
 - `~/.cache/lyrics-terminal/lyrics.log`
 
+Candidate diagnostics are written separately to:
+
+- `~/.cache/lyrics-terminal/candidate_evaluations.jsonl`
+
 ### Main runtime events
 
 The Python runtime logs events such as:
@@ -450,7 +454,7 @@ The Python runtime logs events such as:
 - fetch success
 - fetch failure
 
-For per-track diagnosis, the launcher also records structured pipeline events in `lyrics.log`:
+For per-track launcher diagnosis, the runtime records structured pipeline events in `lyrics.log`:
 
 - `cache_hit_initial`
 - `cache_miss_initial`
@@ -467,7 +471,15 @@ For per-track diagnosis, the launcher also records structured pipeline events in
 
 These events include `track_id`, artist, title, album, and duration so near-matching versions of the same song can be separated during triage. The structured `fetch_spawned` event records `component=lyrics-fetch-go` because it describes the launcher-side fetcher component, not a lyrics provider.
 
-The Go code also logs cache and provider events through its own debug and event paths.
+Candidate-level provider diagnostics are written separately to `~/.cache/lyrics-terminal/candidate_evaluations.jsonl`. Those events describe why a provider candidate was accepted or rejected, while `lyrics.log` tracks launcher/runtime milestones.
+
+Cache provenance in `~/.cache/lyrics-terminal/index.json` uses three states:
+
+- `missing` for legacy cache or `.lrc` files without index provenance
+- `partial` for new cache entries with incomplete optional metadata
+- `complete` for new cache entries with the main provenance fields recorded
+
+`syncedlyrics` can still return usable lyrics without providing full candidate identity. In that case, the diagnostics must mark candidate identity as unavailable instead of copying the target track metadata into the candidate fields.
 
 ### Log rotation
 
@@ -489,6 +501,7 @@ lyrics-fetch-go --analyze-failures
 Relevant files:
 
 - `~/.cache/lyrics-terminal/lyrics.log`
+- `~/.cache/lyrics-terminal/candidate_evaluations.jsonl`
 - `~/.cache/lyrics-terminal/index.json`
 - `~/.cache/lyrics-terminal/failures.jsonl`
 - `~/.cache/lyrics-terminal/negative/`
@@ -606,6 +619,7 @@ go test ./...
 What the current tests cover:
 
 - cache validation and quarantine regression cases in `lyrics_fetch_go/cache_test.go`
+- candidate provenance and provider observability regressions in `lyrics_fetch_go/provenance_observability_test.go`
 - provider and fetcher helper behavior in `lyrics_fetch_go/main_test.go`
 - stats output in `lyrics_fetch_go/diagnostics_test.go`
 - failure analysis output in `lyrics_fetch_go/failure_analysis_test.go`
@@ -628,10 +642,11 @@ The path-isolation tests in `lyrics_fetch_go/cache_test.go` follow this rule by 
 ```text
 1. Confirm the detected track metadata.
 2. Check ~/.cache/lyrics-terminal/lyrics.log.
-3. Inspect lyrics-fetch-go --analyze-failures.
-4. Check whether the lyrics came from cache reuse or a live fetch.
-5. Inspect ~/.local/share/lyrics/bad/ for quarantined files.
-6. Record the evidence before deleting anything.
+3. Check ~/.cache/lyrics-terminal/candidate_evaluations.jsonl for provider-level candidate decisions.
+4. Inspect lyrics-fetch-go --analyze-failures.
+5. Check whether the lyrics came from cache reuse or a live fetch.
+6. Inspect ~/.local/share/lyrics/bad/ for quarantined files.
+7. Record the evidence before deleting anything.
 ```
 
 What to look for:

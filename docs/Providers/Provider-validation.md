@@ -155,7 +155,13 @@ A decisão precisa ser auditável sem registrar a letra completa.
 
 ## Diagnóstico recomendado
 
-Para cada candidato avaliado, registrar apenas metadados:
+Para cada candidato avaliado, registrar apenas metadados no arquivo persistido:
+
+```text
+~/.cache/lyrics-terminal/candidate_evaluations.jsonl
+```
+
+Campos recomendados:
 
 ```text
 provider
@@ -177,7 +183,9 @@ accepted
 rejection_reasons
 ```
 
-Para cache salvo, preservar proveniência mínima:
+Esses eventos são separados das métricas do launcher gravadas em `~/.cache/lyrics-terminal/lyrics.log`.
+
+Para cache salvo, preservar proveniência mínima no índice:
 
 ```text
 provider
@@ -190,6 +198,14 @@ score
 validation_version
 accepted_at
 ```
+
+O índice também precisa distinguir `provenance_status`:
+
+- `missing`: cache legado ou arquivo `.lrc` sem entrada de índice correspondente;
+- `partial`: cache novo com provenance conhecida, mas com alguns metadados opcionais ausentes;
+- `complete`: cache novo com os campos centrais da provenance registrados.
+
+Quando `syncedlyrics` não fornecer identidade confiável para o candidato, o diagnóstico deve registrar `candidate_metadata_available: false` e marcar os campos de match como `unverified`, em vez de copiar artista, título ou álbum da faixa alvo.
 
 ## Testes obrigatórios
 
@@ -206,6 +222,17 @@ Toda mudança de validação deve cobrir pelo menos:
 5. candidato errado não deve ser persistido no cache;
     
 6. cache legado sem proveniência continua funcionando sem ser tratado como confirmação semântica.
+
+## Limite conhecido do syncedlyrics
+
+`syncedlyrics` pode retornar texto sincronizado sem metadata suficiente para atribuição segura de origem.
+
+Quando isso acontecer:
+
+- não copiar metadados da faixa alvo para `candidate_*`;
+- marcar a provenance como `partial`;
+- manter a letra se, e somente se, a validação estrutural continuar passando;
+- registrar o candidato como diagnosticamente incompleto, não como confirmação plena.
     
 
 ## Regra de produto

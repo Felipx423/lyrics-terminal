@@ -61,7 +61,7 @@ func TestRunDryRunDoesNotSaveOrRecord(t *testing.T) {
 		calledFind = true
 		return "", "", false
 	}
-	saveLocalLyricsFn = func(track Track, lrcText string, provider string, sourceID string) ([]string, error) {
+	saveLocalLyricsFn = func(track Track, cand Candidate) ([]string, error) {
 		calledSave = true
 		return nil, nil
 	}

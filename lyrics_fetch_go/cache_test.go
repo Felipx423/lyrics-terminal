@@ -15,6 +15,7 @@ func setupCacheTestEnv(t *testing.T) {
 	origCacheDir := cacheDir
 	origIndexPath := indexPath
 	origFailureLogPath := failureLogPath
+	origCandidateLogPath := candidateLogPath
 
 	root := t.TempDir()
 	homeDir = root
@@ -22,6 +23,7 @@ func setupCacheTestEnv(t *testing.T) {
 	cacheDir = filepath.Join(root, "cache")
 	indexPath = filepath.Join(cacheDir, "index.json")
 	failureLogPath = filepath.Join(cacheDir, "failures.jsonl")
+	candidateLogPath = filepath.Join(cacheDir, "candidate_evaluations.jsonl")
 
 	t.Cleanup(func() {
 		homeDir = origHomeDir
@@ -29,6 +31,7 @@ func setupCacheTestEnv(t *testing.T) {
 		cacheDir = origCacheDir
 		indexPath = origIndexPath
 		failureLogPath = origFailureLogPath
+		candidateLogPath = origCandidateLogPath
 	})
 }
 

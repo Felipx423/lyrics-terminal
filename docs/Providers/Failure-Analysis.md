@@ -34,6 +34,7 @@ Arquivos e diretórios relevantes:
 
 ```text
 ~/.cache/lyrics-terminal/lyrics.log
+~/.cache/lyrics-terminal/candidate_evaluations.jsonl
 ~/.cache/lyrics-terminal/index.json
 ~/.cache/lyrics-terminal/failures.jsonl
 ~/.cache/lyrics-terminal/negative/
@@ -45,7 +46,8 @@ Função de cada fonte:
 
 |Fonte|Uso principal|
 |---|---|
-|`lyrics.log`|Linha do tempo do runtime e eventos por faixa|
+|`lyrics.log`|Linha do tempo do runtime, métricas do launcher e eventos por faixa|
+|`candidate_evaluations.jsonl`|Diagnóstico estruturado de candidatos avaliados pelos providers|
 |`index.json`|Estado recente de cache e resultados persistidos|
 |`failures.jsonl`|Histórico acumulado de falhas|
 |`negative/`|Resultados negativos e tentativas sem sucesso|
@@ -73,6 +75,13 @@ Para filtrar eventos estruturados:
 ```bash
 grep -aE 'cache_hit_initial|cache_miss_initial|fetch_spawned|sptlrx_started|sptlrx_no_output|cache_appeared_after_fetch|track_result' \
   ~/.cache/lyrics-terminal/lyrics.log | tail -n 80
+```
+
+Para investigar por que um candidato foi aceito ou rejeitado, consulte também:
+
+```bash
+grep -aE 'candidate_evaluated|cache_provenance_missing' \
+  ~/.cache/lyrics-terminal/candidate_evaluations.jsonl | tail -n 80
 ```
 
 ## Categorias de Falha

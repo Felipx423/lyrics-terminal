@@ -62,6 +62,12 @@ type neteaseLyricResponse struct {
 	} `json:"songs"`
 }
 
+type scoredNetEaseCandidate struct {
+	song    neteaseSong
+	score   int
+	details map[string]any
+}
+
 func fetchLyrics(ctx context.Context, track Track, debug bool, deepSearch bool) (*Candidate, error) {
 	if cand, err := fetchLRCLIB(ctx, track, debug, deepSearch); err == nil && cand != nil {
 		return cand, nil
@@ -128,31 +134,70 @@ func fetchLRCLIB(ctx context.Context, track Track, debug bool, deepSearch bool) 
 		for _, cand := range candidates {
 			sourceID := candidateSourceID(cand.ID)
 			accepted, reason, details := validateLRCLIBCandidate(cand, track)
+			candidateText := candText(cand)
+			finalReason := reason
+			if accepted && (candidateText == "" || !hasSyncedLines(candidateText)) {
+				accepted = false
+				finalReason = "not synced"
+			}
+			reasons := rejectionReasonsForCandidate(accepted, finalReason, candidateText)
 			debugLog(debug, "lrclib_candidate", map[string]any{
-				"track":           cand.TrackName,
-				"artist":          cand.ArtistName,
-				"album":           cand.AlbumName,
-				"duration":        cand.Duration,
-				"title_match":     details["title_match"],
-				"artist_contains": details["artist_contains"],
-				"duration_diff":   details["duration_diff"],
-				"synced":          candText(cand) != "",
-				"accepted":        accepted,
-				"reason":          reason,
+				"track":             cand.TrackName,
+				"artist":            cand.ArtistName,
+				"album":             cand.AlbumName,
+				"duration":          cand.Duration,
+				"title_match":       details["title_match"],
+				"title_match_type":  details["title_match_type"],
+				"artist_match":      details["artist_match"],
+				"artist_match_type": details["artist_match_type"],
+				"duration_diff":     details["duration_delta_ms"],
+				"synced":            candidateText != "",
+				"accepted":          accepted,
+				"reason":            finalReason,
+			})
+			_ = emitCandidateEvaluation(debug, CandidateEvaluationEvent{
+				Event:                      "candidate_evaluated",
+				Provider:                   "lrclib",
+				SourceID:                   sourceID,
+				TargetTrackID:              track.TrackID,
+				TargetArtist:               track.Artist,
+				TargetTitle:                track.Title,
+				TargetAlbum:                track.Album,
+				TargetDurationMs:           intPtrIfPositive(track.DurationMs),
+				EvaluationStage:            "validation",
+				Decision:                   map[bool]string{true: "accepted", false: "rejected"}[accepted],
+				CandidateMetadataAvailable: boolPtr(true),
+				ProvenanceStatus:           "complete",
+				CandidateArtist:            cand.ArtistName,
+				CandidateTitle:             cand.TrackName,
+				CandidateAlbum:             cand.AlbumName,
+				CandidateDurationMs:        intPtrIfPositive(int(cand.Duration * 1000)),
+				TitleMatchType:             details["title_match_type"].(string),
+				ArtistMatchType:            details["artist_match_type"].(string),
+				DurationDeltaMs:            intPtrIfPositive(details["duration_delta_ms"].(int)),
+				Score:                      nil,
+				Accepted:                   boolPtr(accepted),
+				RejectionReasons:           reasons,
+				ValidationVersion:          validationVersion,
 			})
 			if !accepted {
-				debugLog(debug, "provider_rejected", map[string]any{"provider": "lrclib", "reason": reason, "source_id": sourceID})
-				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: failureCategoryFromReason(strings.ToLower(reason)), Reason: reason, Status: "invalid", SourceID: sourceID, TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
-				continue
-			}
-			text := candText(cand)
-			if text == "" || !hasSyncedLines(text) {
-				debugLog(debug, "provider_rejected", map[string]any{"provider": "lrclib", "reason": "not synced", "source_id": sourceID})
-				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: "resultado não sincronizado", Reason: "lrclib candidate without synced lines", Status: "invalid", SourceID: sourceID, TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
+				debugLog(debug, "provider_rejected", map[string]any{"provider": "lrclib", "reason": finalReason, "source_id": sourceID})
+				_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "lrclib", Category: failureCategoryFromReason(strings.ToLower(finalReason)), Reason: finalReason, Status: "invalid", SourceID: sourceID, TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 				continue
 			}
 			debugLog(debug, "provider_selected", map[string]any{"provider": "lrclib", "source_id": sourceID})
-			return &Candidate{Text: text, Provider: "lrclib", SourceID: sourceID}, nil
+			return &Candidate{
+				Text:              candidateText,
+				Provider:          "lrclib",
+				SourceID:          sourceID,
+				Artist:            cand.ArtistName,
+				Title:             cand.TrackName,
+				Album:             cand.AlbumName,
+				DurationMs:        int(cand.Duration * 1000),
+				MetadataAvailable: true,
+				ProvenanceStatus:  "complete",
+				ValidationVersion: validationVersion,
+			}, nil
 		}
 	}
 	if sawTimeout {
@@ -240,7 +285,7 @@ func fetchNetEaseMap(ctx context.Context, track Track, debug bool) (*Candidate, 
 	if neteaseID == 0 {
 		return nil, errNotFound
 	}
-	return fetchNetEaseLyric(track, neteaseID, "netease-map", debug)
+	return fetchNetEaseLyric(track, neteaseID, "netease-map", -1, debug)
 }
 
 func fetchNetEaseSearch(ctx context.Context, track Track, debug bool) (*Candidate, error) {
@@ -276,45 +321,113 @@ func fetchNetEaseSearch(ctx context.Context, track Track, debug bool) (*Candidat
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	var scored []struct {
-		song  neteaseSong
-		score int
-	}
+	var scored []scoredNetEaseCandidate
 	for _, song := range parsed.Result.Songs {
 		score, details := scoreNetEaseCandidate(song, track)
 		debugLog(debug, "netease_search_candidate", map[string]any{
-			"id":            song.ID,
-			"name":          song.Name,
-			"score":         score,
-			"title_match":   details["title_match"],
-			"artist_match":  details["artist_match"],
-			"duration_diff": details["duration_diff"],
+			"id":                song.ID,
+			"name":              song.Name,
+			"score":             score,
+			"title_match":       details["title_match"],
+			"title_match_type":  details["title_match_type"],
+			"artist_match":      details["artist_match"],
+			"artist_match_type": details["artist_match_type"],
+			"duration_diff":     details["duration_delta_ms"],
 		})
-		scored = append(scored, struct {
-			song  neteaseSong
-			score int
-		}{song: song, score: score})
+		scored = append(scored, scoredNetEaseCandidate{song: song, score: score, details: details})
 	}
 	sortNetEaseScored(scored)
 	for i, item := range scored {
-		if i >= 3 {
-			break
-		}
 		if item.score <= 0 {
+			_ = emitCandidateEvaluation(debug, CandidateEvaluationEvent{
+				Event:                      "candidate_evaluated",
+				Provider:                   "netease-search",
+				SourceID:                   strconv.FormatInt(item.song.ID, 10),
+				TargetTrackID:              track.TrackID,
+				TargetArtist:               track.Artist,
+				TargetTitle:                track.Title,
+				TargetAlbum:                track.Album,
+				TargetDurationMs:           intPtrIfPositive(track.DurationMs),
+				EvaluationStage:            "ranking",
+				Decision:                   "not_attempted",
+				CandidateMetadataAvailable: boolPtr(true),
+				ProvenanceStatus:           "partial",
+				CandidateArtist:            joinArtists(item.song.AR),
+				CandidateTitle:             item.song.Name,
+				CandidateAlbum:             item.song.AL.Name,
+				CandidateDurationMs:        intPtrIfPositive(int(item.song.DT)),
+				TitleMatchType:             item.details["title_match_type"].(string),
+				ArtistMatchType:            item.details["artist_match_type"].(string),
+				DurationDeltaMs:            intPtrIfPositive(item.details["duration_delta_ms"].(int)),
+				Score:                      scorePtr(item.score),
+				RejectionReasons:           []string{"score below threshold"},
+				ValidationVersion:          validationVersion,
+			})
 			continue
 		}
-		cand, err := fetchNetEaseLyric(track, item.song.ID, "netease-search", debug)
+		if i >= 3 {
+			_ = emitCandidateEvaluation(debug, CandidateEvaluationEvent{
+				Event:                      "candidate_evaluated",
+				Provider:                   "netease-search",
+				SourceID:                   strconv.FormatInt(item.song.ID, 10),
+				TargetTrackID:              track.TrackID,
+				TargetArtist:               track.Artist,
+				TargetTitle:                track.Title,
+				TargetAlbum:                track.Album,
+				TargetDurationMs:           intPtrIfPositive(track.DurationMs),
+				EvaluationStage:            "ranking",
+				Decision:                   "ranked_out",
+				CandidateMetadataAvailable: boolPtr(true),
+				ProvenanceStatus:           "partial",
+				CandidateArtist:            joinArtists(item.song.AR),
+				CandidateTitle:             item.song.Name,
+				CandidateAlbum:             item.song.AL.Name,
+				CandidateDurationMs:        intPtrIfPositive(int(item.song.DT)),
+				TitleMatchType:             item.details["title_match_type"].(string),
+				ArtistMatchType:            item.details["artist_match_type"].(string),
+				DurationDeltaMs:            intPtrIfPositive(item.details["duration_delta_ms"].(int)),
+				Score:                      scorePtr(item.score),
+				RejectionReasons:           []string{"score below threshold"},
+				ValidationVersion:          validationVersion,
+			})
+			continue
+		}
+		cand, err := fetchNetEaseLyric(track, item.song.ID, "netease-search", item.score, debug)
 		if err == nil && cand != nil {
 			return cand, nil
 		}
 		if err != nil && !errors.Is(err, errNotFound) {
+			_ = emitCandidateEvaluation(debug, CandidateEvaluationEvent{
+				Event:                      "candidate_evaluated",
+				Provider:                   "netease-search",
+				SourceID:                   strconv.FormatInt(item.song.ID, 10),
+				TargetTrackID:              track.TrackID,
+				TargetArtist:               track.Artist,
+				TargetTitle:                track.Title,
+				TargetAlbum:                track.Album,
+				TargetDurationMs:           intPtrIfPositive(track.DurationMs),
+				EvaluationStage:            "validation",
+				Decision:                   "provider_error",
+				CandidateMetadataAvailable: boolPtr(true),
+				ProvenanceStatus:           "partial",
+				CandidateArtist:            joinArtists(item.song.AR),
+				CandidateTitle:             item.song.Name,
+				CandidateAlbum:             item.song.AL.Name,
+				CandidateDurationMs:        intPtrIfPositive(int(item.song.DT)),
+				TitleMatchType:             item.details["title_match_type"].(string),
+				ArtistMatchType:            item.details["artist_match_type"].(string),
+				DurationDeltaMs:            intPtrIfPositive(item.details["duration_delta_ms"].(int)),
+				Score:                      scorePtr(item.score),
+				RejectionReasons:           []string{err.Error()},
+				ValidationVersion:          validationVersion,
+			})
 			return nil, err
 		}
 	}
 	return nil, errNotFound
 }
 
-func fetchNetEaseLyric(track Track, neteaseID int64, provider string, debug bool) (*Candidate, error) {
+func fetchNetEaseLyric(track Track, neteaseID int64, provider string, score int, debug bool) (*Candidate, error) {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://music.163.com/api/song/lyric?id=%d&lv=1&kv=1&tv=-1", neteaseID), nil)
 	if err != nil {
 		return nil, err
@@ -337,31 +450,112 @@ func fetchNetEaseLyric(track Track, neteaseID int64, provider string, debug bool
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	lrc := parsed.LRC.Lyric
-	if strings.TrimSpace(lrc) == "" {
-		debugLog(debug, "netease_lyric", fmt.Sprintf("%d no lrc", neteaseID))
-		debugLog(debug, "provider_rejected", map[string]any{"provider": provider, "reason": "empty lyric", "source_id": neteaseID})
-		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: provider, Category: "letra inexistente", Reason: "netease returned empty lyric", Status: "not_found", SourceID: strconv.FormatInt(neteaseID, 10), TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
-		return nil, errNotFound
-	}
-	candidateTitle := track.Title
-	candidateArtist := track.Artist
-	candidateDurationMs := track.DurationMs
+	candidateMetadataAvailable := len(parsed.Songs) > 0
+	candidateTitle := ""
+	candidateArtist := ""
+	candidateDurationMs := 0
 	if len(parsed.Songs) > 0 {
 		candidateTitle = parsed.Songs[0].Name
 		candidateArtist = joinArtists(parsed.Songs[0].AR)
 		candidateDurationMs = int(parsed.Songs[0].DT)
 	}
-	accepted, reason, details := validateGenericCandidate(candidateTitle, candidateArtist, "", lrc, track, candidateDurationMs)
+	lrc := parsed.LRC.Lyric
+	validationTitle := candidateTitle
+	validationArtist := candidateArtist
+	validationDuration := candidateDurationMs
+	if !candidateMetadataAvailable {
+		validationTitle = track.Title
+		validationArtist = track.Artist
+		validationDuration = track.DurationMs
+	}
+	if strings.TrimSpace(lrc) == "" {
+		debugLog(debug, "netease_lyric", fmt.Sprintf("%d no lrc", neteaseID))
+		debugLog(debug, "provider_rejected", map[string]any{"provider": provider, "reason": "empty lyric", "source_id": neteaseID})
+		_ = emitCandidateEvaluation(debug, CandidateEvaluationEvent{
+			Event:                      "candidate_evaluated",
+			Provider:                   provider,
+			SourceID:                   strconv.FormatInt(neteaseID, 10),
+			TargetTrackID:              track.TrackID,
+			TargetArtist:               track.Artist,
+			TargetTitle:                track.Title,
+			TargetAlbum:                track.Album,
+			TargetDurationMs:           intPtrIfPositive(track.DurationMs),
+			EvaluationStage:            "validation",
+			Decision:                   "rejected",
+			CandidateMetadataAvailable: boolPtr(candidateMetadataAvailable),
+			ProvenanceStatus:           map[bool]string{true: "complete", false: "partial"}[candidateMetadataAvailable],
+			CandidateArtist:            candidateArtist,
+			CandidateTitle:             candidateTitle,
+			CandidateAlbum:             "",
+			CandidateDurationMs: func() *int {
+				if !candidateMetadataAvailable {
+					return nil
+				}
+				return intPtrIfPositive(candidateDurationMs)
+			}(),
+			TitleMatchType:  "none",
+			ArtistMatchType: "none",
+			DurationDeltaMs: func() *int {
+				if !candidateMetadataAvailable {
+					return nil
+				}
+				return intPtrIfPositive(absInt(validationDuration - track.DurationMs))
+			}(),
+			Score:             scorePtr(score),
+			Accepted:          boolPtr(false),
+			RejectionReasons:  []string{"empty lyric"},
+			ValidationVersion: validationVersion,
+		})
+		_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: provider, Category: "letra inexistente", Reason: "netease returned empty lyric", Status: "not_found", SourceID: strconv.FormatInt(neteaseID, 10), TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
+		return nil, errNotFound
+	}
+	accepted, reason, details := validateGenericCandidate(validationTitle, validationArtist, "", lrc, track, validationDuration)
 	debugLog(debug, "netease_candidate", map[string]any{
-		"id":            neteaseID,
-		"title":         candidateTitle,
-		"artist":        candidateArtist,
-		"accepted":      accepted,
-		"reason":        reason,
-		"title_match":   details["title_match"],
-		"artist_match":  details["artist_match"],
-		"duration_diff": details["duration_diff"],
+		"id":                neteaseID,
+		"title":             candidateTitle,
+		"artist":            candidateArtist,
+		"accepted":          accepted,
+		"reason":            reason,
+		"title_match":       details["title_match"],
+		"title_match_type":  details["title_match_type"],
+		"artist_match":      details["artist_match"],
+		"artist_match_type": details["artist_match_type"],
+		"duration_diff":     details["duration_delta_ms"],
+	})
+	_ = emitCandidateEvaluation(debug, CandidateEvaluationEvent{
+		Event:                      "candidate_evaluated",
+		Provider:                   provider,
+		SourceID:                   strconv.FormatInt(neteaseID, 10),
+		TargetTrackID:              track.TrackID,
+		TargetArtist:               track.Artist,
+		TargetTitle:                track.Title,
+		TargetAlbum:                track.Album,
+		TargetDurationMs:           intPtrIfPositive(track.DurationMs),
+		EvaluationStage:            "validation",
+		Decision:                   map[bool]string{true: "accepted", false: "rejected"}[accepted],
+		CandidateMetadataAvailable: boolPtr(candidateMetadataAvailable),
+		ProvenanceStatus:           map[bool]string{true: "complete", false: "partial"}[candidateMetadataAvailable],
+		CandidateArtist:            candidateArtist,
+		CandidateTitle:             candidateTitle,
+		CandidateAlbum:             "",
+		CandidateDurationMs: func() *int {
+			if !candidateMetadataAvailable {
+				return nil
+			}
+			return intPtrIfPositive(candidateDurationMs)
+		}(),
+		TitleMatchType:  details["title_match_type"].(string),
+		ArtistMatchType: details["artist_match_type"].(string),
+		DurationDeltaMs: func() *int {
+			if !candidateMetadataAvailable {
+				return nil
+			}
+			return intPtrIfPositive(details["duration_delta_ms"].(int))
+		}(),
+		Score:             scorePtr(score),
+		Accepted:          boolPtr(accepted),
+		RejectionReasons:  rejectionReasonsForCandidate(accepted, reason, lrc),
+		ValidationVersion: validationVersion,
 	})
 	if !accepted {
 		debugLog(debug, "provider_rejected", map[string]any{"provider": provider, "reason": reason, "source_id": neteaseID})
@@ -369,7 +563,7 @@ func fetchNetEaseLyric(track Track, neteaseID int64, provider string, debug bool
 		return nil, errNotFound
 	}
 	debugLog(debug, "provider_selected", map[string]any{"provider": provider, "source_id": neteaseID})
-	return &Candidate{Text: lrc, Provider: provider, SourceID: strconv.FormatInt(neteaseID, 10)}, nil
+	return &Candidate{Text: lrc, Provider: provider, SourceID: strconv.FormatInt(neteaseID, 10), Artist: candidateArtist, Title: candidateTitle, Album: "", DurationMs: candidateDurationMs, Score: score, MetadataAvailable: candidateMetadataAvailable, ProvenanceStatus: map[bool]string{true: "complete", false: "partial"}[candidateMetadataAvailable], ValidationVersion: validationVersion}, nil
 }
 
 func fetchSyncedLyricsCLI(ctx context.Context, track Track, debug bool, deepSearch bool) (*Candidate, error) {
@@ -411,8 +605,28 @@ func fetchSyncedLyricsCLI(ctx context.Context, track Track, debug bool, deepSear
 			_ = recordFailureEvent(FailureEvent{Artist: track.Artist, Title: track.Title, Provider: "syncedlyrics", Category: "letra inexistente", Reason: "syncedlyrics returned empty output", Status: "not_found", TrackID: track.TrackID, DurationMs: track.DurationMs, Source: "provider"})
 			continue
 		}
-		accepted, reason, _ := validateGenericCandidate(track.Title, track.Artist, "", text, track, track.DurationMs)
+		accepted, reason, details := validateGenericCandidate(track.Title, track.Artist, "", text, track, track.DurationMs)
 		debugLog(debug, "syncedlyrics_candidate", map[string]any{"accepted": accepted, "reason": reason})
+		_ = emitCandidateEvaluation(debug, CandidateEvaluationEvent{
+			Event:                      "candidate_evaluated",
+			Provider:                   "syncedlyrics",
+			TargetTrackID:              track.TrackID,
+			TargetArtist:               track.Artist,
+			TargetTitle:                track.Title,
+			TargetAlbum:                track.Album,
+			TargetDurationMs:           intPtrIfPositive(track.DurationMs),
+			EvaluationStage:            "validation",
+			Decision:                   map[bool]string{true: "accepted", false: "rejected"}[accepted],
+			CandidateMetadataAvailable: boolPtr(false),
+			ProvenanceStatus:           "partial",
+			TitleMatchType:             details["title_match_type"].(string),
+			ArtistMatchType:            details["artist_match_type"].(string),
+			DurationDeltaMs:            nil,
+			CandidateDurationMs:        nil,
+			Accepted:                   boolPtr(accepted),
+			RejectionReasons:           rejectionReasonsForCandidate(accepted, reason, text),
+			ValidationVersion:          validationVersion,
+		})
 		if !accepted || !hasSyncedLines(text) {
 			category := failureCategoryFromReason(strings.ToLower(reason))
 			if !hasSyncedLines(text) {
@@ -424,7 +638,7 @@ func fetchSyncedLyricsCLI(ctx context.Context, track Track, debug bool, deepSear
 			continue
 		}
 		debugLog(debug, "provider_selected", map[string]any{"provider": "syncedlyrics"})
-		return &Candidate{Text: text, Provider: "syncedlyrics"}, nil
+		return &Candidate{Text: text, Provider: "syncedlyrics", MetadataAvailable: false, ProvenanceStatus: "partial", ValidationVersion: validationVersion}, nil
 	}
 	return nil, errNotFound
 }
@@ -433,21 +647,60 @@ func validateLRCLIBCandidate(cand lrclibCandidate, track Track) (bool, string, m
 	return validateGenericCandidate(cand.TrackName, cand.ArtistName, cand.AlbumName, candText(cand), track, int(cand.Duration*1000))
 }
 
-func validateGenericCandidate(candidateTitle, candidateArtist, candidateAlbum, lyricsText string, track Track, candidateDurationMs int) (bool, string, map[string]any) {
+func candidateTitleMatchType(candidateTitleNorm, trackTitleNorm string) string {
+	switch {
+	case candidateTitleNorm == "" || trackTitleNorm == "":
+		return "none"
+	case candidateTitleNorm == trackTitleNorm:
+		return "exact"
+	case strings.HasPrefix(candidateTitleNorm, trackTitleNorm):
+		return "prefix"
+	case strings.Contains(candidateTitleNorm, trackTitleNorm):
+		return "candidate_contains_target"
+	case strings.Contains(trackTitleNorm, candidateTitleNorm):
+		return "target_contains_candidate"
+	default:
+		return "none"
+	}
+}
+
+func candidateMatchTypes(candidateTitle, candidateArtist, candidateAlbum string, track Track, candidateDurationMs int) (string, string, int, bool, bool) {
 	cleanTitle := normalizeText(cleanTrackTitle(track.Title))
 	candidateTitleNorm := normalizeText(cleanTrackTitle(candidateTitle))
-	candidateBlob := normalizeText(strings.Join([]string{candidateTitle, candidateArtist, candidateAlbum}, " "))
-	trackArtistNorm := normalizeText(cleanArtistName(track.Artist))
+	candidateArtistNorm := normalizeText(cleanArtistName(candidateArtist))
+	candidateAlbumNorm := normalizeText(candidateAlbum)
 	titleMatch := candidateTitleNorm == cleanTitle || strings.HasPrefix(candidateTitleNorm, cleanTitle) || strings.Contains(candidateTitleNorm, cleanTitle)
-	artistMatch := trackArtistNorm != "" && strings.Contains(candidateBlob, trackArtistNorm)
-	durationDiff := -1
-	if track.DurationMs > 0 && candidateDurationMs > 0 {
-		durationDiff = absInt(candidateDurationMs - track.DurationMs)
+	trackArtistNorm := normalizeText(cleanArtistName(track.Artist))
+	artistMatch := trackArtistNorm != "" && strings.Contains(normalizeText(strings.Join([]string{candidateTitle, candidateArtist, candidateAlbum}, " ")), trackArtistNorm)
+	titleMatchType := candidateTitleMatchType(candidateTitleNorm, cleanTitle)
+	artistMatchType := "none"
+	switch {
+	case trackArtistNorm == "":
+		artistMatchType = "unverified"
+	case strings.Contains(candidateTitleNorm, trackArtistNorm):
+		artistMatchType = "title"
+	case strings.Contains(candidateArtistNorm, trackArtistNorm):
+		artistMatchType = "artist"
+	case strings.Contains(candidateAlbumNorm, trackArtistNorm):
+		artistMatchType = "album"
+	case artistMatch:
+		artistMatchType = "combined"
 	}
+	durationDeltaMs := -1
+	if track.DurationMs > 0 && candidateDurationMs > 0 {
+		durationDeltaMs = absInt(candidateDurationMs - track.DurationMs)
+	}
+	return titleMatchType, artistMatchType, durationDeltaMs, titleMatch, artistMatch
+}
+
+func validateGenericCandidate(candidateTitle, candidateArtist, candidateAlbum, lyricsText string, track Track, candidateDurationMs int) (bool, string, map[string]any) {
+	titleMatchType, artistMatchType, durationDiff, titleMatch, artistMatch := candidateMatchTypes(candidateTitle, candidateArtist, candidateAlbum, track, candidateDurationMs)
 	details := map[string]any{
-		"title_match":   titleMatch,
-		"artist_match":  artistMatch,
-		"duration_diff": durationDiff,
+		"title_match":       titleMatch,
+		"title_match_type":  titleMatchType,
+		"artist_match":      artistMatch,
+		"artist_match_type": artistMatchType,
+		"duration_delta_ms": durationDiff,
 	}
 	if !titleMatch {
 		return false, "title mismatch", details
@@ -475,6 +728,17 @@ func scoreNetEaseCandidate(song neteaseSong, track Track) (int, map[string]any) 
 	if track.DurationMs > 0 && song.DT > 0 {
 		durationDiff = absInt(int(song.DT) - track.DurationMs)
 	}
+	titleMatchType := candidateTitleMatchType(titleNorm, trackTitleNorm)
+	artistMatchType := "none"
+	if trackArtistNorm == "" {
+		artistMatchType = "unverified"
+	} else if strings.Contains(titleNorm, trackArtistNorm) {
+		artistMatchType = "title"
+	} else if strings.Contains(artistNorm, trackArtistNorm) {
+		artistMatchType = "artist"
+	} else if artistMatch {
+		artistMatchType = "combined"
+	}
 	score := 0
 	if titleMatch {
 		score += 2
@@ -486,10 +750,82 @@ func scoreNetEaseCandidate(song neteaseSong, track Track) (int, map[string]any) 
 		score += 1
 	}
 	return score, map[string]any{
-		"title_match":   titleMatch,
-		"artist_match":  artistMatch,
-		"duration_diff": durationDiff,
+		"title_match":       titleMatch,
+		"title_match_type":  titleMatchType,
+		"artist_match":      artistMatch,
+		"artist_match_type": artistMatchType,
+		"duration_delta_ms": durationDiff,
 	}
+}
+
+func emitCandidateEvaluation(debug bool, event CandidateEvaluationEvent) error {
+	if event.Event == "" {
+		event.Event = "candidate_evaluated"
+	}
+	if event.EvaluationStage == "" {
+		event.EvaluationStage = "validation"
+	}
+	if event.Decision == "" {
+		switch {
+		case event.Accepted != nil && *event.Accepted:
+			event.Decision = "accepted"
+		case len(event.RejectionReasons) > 0:
+			event.Decision = "rejected"
+		default:
+			event.Decision = "not_attempted"
+		}
+	}
+	if event.CandidateMetadataAvailable != nil && !*event.CandidateMetadataAvailable {
+		event.CandidateArtist = ""
+		event.CandidateTitle = ""
+		event.CandidateAlbum = ""
+		event.CandidateDurationMs = nil
+		event.DurationDeltaMs = nil
+		event.TitleMatchType = "unverified"
+		event.ArtistMatchType = "unverified"
+		if event.ProvenanceStatus == "" {
+			event.ProvenanceStatus = "partial"
+		}
+	}
+	if event.CandidateMetadataAvailable != nil && *event.CandidateMetadataAvailable && event.ProvenanceStatus == "" {
+		event.ProvenanceStatus = "partial"
+	}
+	if err := recordCandidateEvaluation(event); err != nil && debug {
+		debugLog(debug, "candidate_diagnostic_error", map[string]any{"event": event.Event, "error": err.Error()})
+		return err
+	}
+	return nil
+}
+
+func scorePtr(v int) *int {
+	if v < 0 {
+		return nil
+	}
+	return &v
+}
+
+func intPtrIfPositive(v int) *int {
+	if v <= 0 {
+		return nil
+	}
+	return &v
+}
+
+func rejectionReasonsForCandidate(accepted bool, reason string, lyricsText string) []string {
+	if accepted {
+		return nil
+	}
+	reasons := []string{}
+	if strings.TrimSpace(reason) != "" && reason != "ok" {
+		reasons = append(reasons, reason)
+	}
+	if strings.TrimSpace(lyricsText) == "" {
+		reasons = append(reasons, "empty lyric")
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "rejected")
+	}
+	return dedupeStrings(reasons)
 }
 
 func lookupNetEaseID(m map[string]any, track Track) int64 {
@@ -600,10 +936,7 @@ func setNetEaseHeaders(req *http.Request) {
 	req.Header.Set("Origin", "https://music.163.com")
 }
 
-func sortNetEaseScored(items []struct {
-	song  neteaseSong
-	score int
-}) {
+func sortNetEaseScored(items []scoredNetEaseCandidate) {
 	for i := range items {
 		for j := i + 1; j < len(items); j++ {
 			if items[j].score > items[i].score {

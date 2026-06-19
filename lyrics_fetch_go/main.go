@@ -89,6 +89,9 @@ func run(args []string) int {
 		if existingPath, _, ok := findLocalLRCFn(track); ok {
 			debugLog(*debug, "local_exists", existingPath)
 			debugLog(*debug, "cache_hit", existingPath)
+			if err := recordCacheProvenanceMissing(track); err != nil {
+				debugLog(*debug, "index_error", err)
+			}
 			if err := recordSearchOutcomeFn(track, "found", "local-cache", existingPath, "", []string{existingPath}); err != nil {
 				debugLog(*debug, "index_error", err)
 			}
@@ -172,7 +175,7 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "dry-run: not saving .lrc")
 		return 0
 	}
-	saved, err := saveLocalLyricsFn(track, cand.Text, cand.Provider, cand.SourceID)
+	saved, err := saveLocalLyricsFn(track, *cand)
 	if err != nil {
 		debugLog(*debug, "local_save_error", err)
 		return 1
