@@ -1,0 +1,121 @@
+name: Bug report
+description: Report a crash, installation problem, mode issue, health check failure, or unexpected behavior.
+title: "[Bug]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for general bugs, crashes, installation problems, Kitty/current-terminal issues, or unexpected behavior.
+        Please remove personal data from any logs before submitting them.
+  - type: input
+    id: summary
+    attributes:
+      label: Short summary
+      description: What went wrong in one sentence.
+      placeholder: Lyrics does not open in Kitty on my system
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead.
+      placeholder: The lyrics window should open and show the current track.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead.
+      placeholder: The command exits immediately with an error.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest reliable set of steps.
+      placeholder: |
+        1. Start Spotify
+        2. Run `lyrics`
+        3. Observe the failure
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command used
+      description: The exact command you ran.
+      placeholder: lyrics --current
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Linux distribution
+      description: Your distro and version if known.
+      placeholder: Ubuntu 24.04, Fedora 40, Arch, etc.
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session environment
+      description: Which desktop session or window manager was active.
+      options:
+        - Hyprland
+        - GNOME
+        - KDE Plasma
+        - Xfce
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal used
+      description: The terminal emulator or shell context.
+      placeholder: kitty, alacritty, GNOME Terminal, foot
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Project version
+      description: Use `lyrics --version` and paste the version or commit if shown.
+      placeholder: v0.6.0 Real World Testing
+    validations:
+      required: true
+  - type: checkboxes
+    id: health
+    attributes:
+      label: Health check
+      description: Confirm you tried the built-in health check.
+      options:
+        - label: I ran `lyrics --health`.
+          required: true
+  - type: textarea
+    id: health_output
+    attributes:
+      label: "`lyrics --health` output"
+      description: Optional, but helpful when the health check reports warnings or failures.
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Optional. Paste the smallest relevant excerpt from `~/.cache/lyrics-terminal/lyrics.log`.
+      render: shell
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Optional. Attach screenshots if they help explain the issue.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Optional. Add anything else that may help investigation.
+      placeholder: Mention whether the issue is reproducible after restart.

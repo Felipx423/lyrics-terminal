@@ -1,0 +1,76 @@
+name: Feature request
+description: Suggest a change that improves real-world use without mixing it with a bug report.
+title: "[Feature]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for ideas that improve real-world use.
+        The project is in Real World Testing, so larger features may be deferred to future milestones.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem this solves
+      description: What real usage problem would this suggestion address?
+      placeholder: It would make it easier to tell whether the current track failed due to cache or provider behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed behavior
+      description: What should the project do instead?
+      placeholder: Add a clearer warning when cache validation rejects a local file.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this helps
+      description: Explain how this improves real-world use.
+      placeholder: It reduces confusion during daily use and makes debugging faster.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you think about?
+      placeholder: A manual workaround, a docs update, or no change.
+    validations:
+      required: true
+  - type: input
+    id: example
+    attributes:
+      label: Example use case
+      description: Optional. Give a concrete scenario if helpful.
+      placeholder: When switching tracks quickly in Kitty mode.
+  - type: textarea
+    id: mockup
+    attributes:
+      label: Mockup or screenshot
+      description: Optional. Attach a screenshot or describe the UI idea.
+  - type: input
+    id: related_issue
+    attributes:
+      label: Related issue
+      description: Optional. Link a related issue if one already exists.
+      placeholder: "#123"
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Expected impact
+      description: Optional. Choose the closest area of improvement.
+      options:
+        - usability
+        - accessibility
+        - diagnostics
+        - cache
+        - providers
+        - configuration
+        - other
+  - type: markdown
+    attributes:
+      value: |
+        Keep feature requests focused on practical, real-world value. Large changes may be split into later milestones.

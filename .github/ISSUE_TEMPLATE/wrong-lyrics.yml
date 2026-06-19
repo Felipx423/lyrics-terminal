@@ -1,0 +1,121 @@
+name: Wrong lyrics report
+description: Report lyrics that match the wrong track, artist, language, version, or recording.
+title: "[Wrong lyrics]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when the app shows lyrics for the wrong song, version, language, or recording.
+        A track without coverage is not necessarily a bug. Wrong lyrics for a real track are.
+  - type: input
+    id: artist
+    attributes:
+      label: Artist
+      description: The artist shown in Spotify.
+      placeholder: Aimar
+    validations:
+      required: true
+  - type: input
+    id: track_title
+    attributes:
+      label: Track title
+      description: The track title shown in Spotify.
+      placeholder: LINGERIE
+    validations:
+      required: true
+  - type: input
+    id: album
+    attributes:
+      label: Album
+      description: Optional. Add it if you know it.
+      placeholder: Album name or leave blank
+  - type: input
+    id: duration
+    attributes:
+      label: Approximate duration
+      description: Optional. A rough duration is enough.
+      placeholder: 3:42
+  - type: textarea
+    id: wrong
+    attributes:
+      label: What appeared wrong
+      description: Describe what the app showed.
+      placeholder: The lyrics were in Japanese instead of the expected Latin-language track.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Explain what should have been shown instead.
+      placeholder: Lyrics for this artist and title, not another track with a similar name.
+    validations:
+      required: true
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: Can you trigger this wrong-lyrics result again?
+      options:
+        - reproducible
+        - happened once
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode used
+      description: Which runtime mode was active.
+      options:
+        - default Kitty mode
+        - "`lyrics --kitty`"
+        - "`lyrics --current`"
+        - unknown
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider shown in logs
+      description: Optional. Only fill this if the logs mention a provider.
+      placeholder: LRCLIB, NetEase Map, NetEase Search, syncedlyrics
+  - type: dropdown
+    id: source
+    attributes:
+      label: Where the lyrics came from
+      description: Optional. If you know whether the result came from cache or live fetch, choose it here.
+      options:
+        - cache
+        - live fetch
+        - unknown
+  - type: textarea
+    id: analyze_failures
+    attributes:
+      label: "`lyrics-fetch-go --analyze-failures`"
+      description: Optional. Paste relevant output if you ran the analysis command.
+      render: shell
+  - type: textarea
+    id: wrong_excerpt
+    attributes:
+      label: Short wrong excerpt
+      description: Optional. Share only a short fragment, not the full lyrics.
+      placeholder: A short line or description of the mismatch.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Optional. Paste the smallest relevant excerpt from `~/.cache/lyrics-terminal/lyrics.log`.
+      render: shell
+  - type: textarea
+    id: quarantine
+    attributes:
+      label: Related quarantine file
+      description: Optional. Mention a file in `~/.local/share/lyrics/bad/` if one exists.
+      placeholder: Path or filename, if available
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Optional. Add anything else that may help investigation.

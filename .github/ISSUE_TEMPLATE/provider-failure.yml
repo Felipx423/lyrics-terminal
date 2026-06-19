@@ -1,0 +1,107 @@
+name: Provider or fetch failure
+description: Report timeouts, provider outages, metadata mismatches, or unexpected no-result cases.
+title: "[Provider failure]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for timeouts, provider outages, metadata mismatches, or failures in the fetch pipeline.
+        Do not assume a track without lyrics is a bug until you verify whether it is simply missing coverage.
+  - type: input
+    id: artist
+    attributes:
+      label: Artist
+      description: The artist from the current track.
+      placeholder: Aimar
+    validations:
+      required: true
+  - type: input
+    id: track_title
+    attributes:
+      label: Track title
+      description: The track title from the current track.
+      placeholder: LINGERIE
+    validations:
+      required: true
+  - type: input
+    id: duration
+    attributes:
+      label: Approximate duration
+      description: Optional. A rough duration helps match the correct recording.
+      placeholder: 3:42
+  - type: dropdown
+    id: failure_type
+    attributes:
+      label: Failure type
+      description: Select the closest match.
+      options:
+        - timeout
+        - no results
+        - provider unavailable
+        - artist mismatch
+        - title mismatch
+        - duration mismatch
+        - unsynced lyrics
+        - unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Frequency
+      description: How often this happens.
+      options:
+        - happened once
+        - reproducible
+        - happens often
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command or mode used
+      description: The exact command or runtime mode involved.
+      placeholder: lyrics --current
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider involved
+      description: Optional. Add the provider if the logs or analysis identify one.
+      placeholder: LRCLIB, NetEase Map, NetEase Search, syncedlyrics
+  - type: textarea
+    id: stats
+    attributes:
+      label: "`lyrics-fetch-go --stats`"
+      description: Optional. Paste relevant output if you ran the stats command.
+      render: shell
+  - type: textarea
+    id: analyze_failures
+    attributes:
+      label: "`lyrics-fetch-go --analyze-failures`"
+      description: Optional. Paste relevant output if you ran the analysis command.
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Optional. Paste the smallest relevant excerpt from `~/.cache/lyrics-terminal/lyrics.log`.
+      render: shell
+  - type: checkboxes
+    id: elsewhere
+    attributes:
+      label: External coverage
+      description: Optional. Check this only if you confirmed the song has synced lyrics somewhere else.
+      options:
+        - label: This track has synced lyrics elsewhere.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Optional. Add anything else that may help investigation.
+  - type: markdown
+    attributes:
+      value: |
+        A missing result alone is not automatically a bug; it may simply mean the current providers do not cover the track.
