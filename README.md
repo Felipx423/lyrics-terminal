@@ -264,11 +264,15 @@ Verifique se o Kitty está instalado e disponível no PATH:
 kitty --version
 ```
 
-## Status do projeto
+## Current Status
 
-Versão atual:
+Project status: Real World Testing
 
-**v0.5.0-observability**
+Current release: `v0.5.0 Observability`
+
+Current milestone: `v0.6.0 Real World Testing`
+
+The project is considered functional but not yet stable. Real-world usage data is still being collected before broader feature expansion.
 
 O projeto está em fase de teste real, com foco em:
 
