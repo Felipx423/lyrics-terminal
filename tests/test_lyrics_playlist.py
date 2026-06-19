@@ -165,12 +165,15 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(calls, [("kitty", True, module.DEFAULT_NO_OUTPUT_SECONDS)])
 
-    def test_main_routes_to_current_terminal_when_requested(self) -> None:
+    def test_main_routes_to_current_terminal_skips_kitty_launcher(self) -> None:
         module = load_script_module()
         calls: list[tuple[str, bool, float]] = []
 
         module.run_terminal = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("run", debug, no_output_timeout)) or 0
-        module.launch_kitty = lambda debug=False, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: calls.append(("kitty", debug, no_output_timeout)) or 0
+        def fail_if_kitty_called(*_args, **_kwargs):
+            raise AssertionError("launch_kitty must not be called for --current")
+
+        module.launch_kitty = fail_if_kitty_called
         original_argv = module.sys.argv
         module.sys.argv = ["lyrics", "--current", "--debug"]
         try:
@@ -247,6 +250,60 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertIn("PASS cache directory:", text)
         self.assertIn("PASS local lyrics directory:", text)
         self.assertIn("PASS index.json:", text)
+
+    def test_main_health_warns_when_kitty_is_missing_but_current_mode_stays_usable(self) -> None:
+        module = load_script_module()
+        fake_lib = FakeLib(statuses=[], tracks=[], local_paths={})
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        fake_lib.CACHE_DIR = Path(temp_dir.name) / "cache"
+        fake_lib.LOCAL_DIR = Path(temp_dir.name) / "local"
+        fake_lib.INDEX_PATH = fake_lib.CACHE_DIR / "index.json"
+        fake_lib.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        fake_lib.LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+        fake_lib.INDEX_PATH.write_text("{}", encoding="utf-8")
+        module.lib = fake_lib
+        module.shutil.which = lambda name: None if name == "kitty" else f"/usr/bin/{name}"
+        module.subprocess.run = lambda *args, **kwargs: types.SimpleNamespace(stdout="playing\n", stderr="", returncode=0)
+        original_argv = module.sys.argv
+        module.sys.argv = ["lyrics", "--health"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                result = module.main()
+        finally:
+            module.sys.argv = original_argv
+
+        self.assertEqual(result, 0)
+        text = stdout.getvalue()
+        self.assertIn("WARN kitty:", text)
+        self.assertIn("required only for default/--kitty mode", text)
+
+    def test_main_health_fails_when_playerctl_is_missing(self) -> None:
+        module = load_script_module()
+        fake_lib = FakeLib(statuses=[], tracks=[], local_paths={})
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        fake_lib.CACHE_DIR = Path(temp_dir.name) / "cache"
+        fake_lib.LOCAL_DIR = Path(temp_dir.name) / "local"
+        fake_lib.INDEX_PATH = fake_lib.CACHE_DIR / "index.json"
+        fake_lib.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        fake_lib.LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+        fake_lib.INDEX_PATH.write_text("{}", encoding="utf-8")
+        module.lib = fake_lib
+        module.shutil.which = lambda name: None if name == "playerctl" else f"/usr/bin/{name}"
+        module.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("playerctl status should not run when playerctl is missing"))
+        original_argv = module.sys.argv
+        module.sys.argv = ["lyrics", "--health"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                result = module.main()
+        finally:
+            module.sys.argv = original_argv
+
+        self.assertEqual(result, 1)
+        text = stdout.getvalue()
+        self.assertIn("FAIL spotify:", text)
+        self.assertIn("FAIL playerctl:", text)
 
     def test_launch_kitty_uses_direct_exec(self) -> None:
         module = load_script_module()
@@ -405,6 +462,45 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertIn(("paused_wait", "sptlrx"), debug_logs)
         self.assertIn(("spotify_resumed", "Artist - Paused Song"), debug_logs)
         self.assertIn(module.POLL_INTERVAL_SECONDS, slept)
+
+    def test_render_message_falls_back_on_tiny_terminal(self) -> None:
+        module = load_script_module()
+        original_size = module.lib.shutil.get_terminal_size
+        original_clear = module.lib.clear_screen
+        try:
+            module.lib.LAST_RENDER = None
+            module.lib.shutil.get_terminal_size = lambda fallback=(80, 24): types.SimpleNamespace(columns=20, lines=4)
+            module.lib.clear_screen = lambda: None
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                module.lib.render_message("Too Small", ["Resize the terminal."])
+            text = stdout.getvalue()
+        finally:
+            module.lib.shutil.get_terminal_size = original_size
+            module.lib.clear_screen = original_clear
+            module.lib.LAST_RENDER = None
+
+        self.assertIn("Too Small", text)
+        self.assertIn("Resize the terminal.", text)
+        self.assertNotIn("┌", text)
+
+    def test_render_single_line_falls_back_on_tiny_terminal(self) -> None:
+        module = load_script_module()
+        original_size = module.lib.shutil.get_terminal_size
+        original_clear = module.lib.clear_screen
+        try:
+            module.lib.LAST_RENDER = None
+            module.lib.shutil.get_terminal_size = lambda fallback=(80, 24): types.SimpleNamespace(columns=20, lines=4)
+            module.lib.clear_screen = lambda: None
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                module.lib.render_single_line("Short lyric line")
+            text = stdout.getvalue()
+        finally:
+            module.lib.shutil.get_terminal_size = original_size
+            module.lib.clear_screen = original_clear
+            module.lib.LAST_RENDER = None
+
+        self.assertIn("Short lyric line", text)
+        self.assertNotIn("┌", text)
 
     def test_run_terminal_restarts_after_local_track_changed_exit(self) -> None:
         module = load_script_module()

@@ -53,7 +53,8 @@ Feedback is welcome, especially for:
 - Spotify visible through MPRIS
 - `python3`
 - `playerctl`
-- `kitty` for the default windowed mode
+- `kitty` for the default windowed mode and `lyrics --kitty`
+- Kitty is not required for `lyrics --current`
 - `sptlrx` for live fallback rendering
 - Go toolchain to build `lyrics-fetch-go` during installation
 
@@ -131,6 +132,7 @@ Use this when you want the dedicated window mode to be obvious in scripts or not
 Runs the runtime in the current terminal instead of opening Kitty.
 
 Use this when you want to keep output in the active terminal session.
+It does not require Kitty.
 
 ### `lyrics --health`
 
@@ -145,6 +147,8 @@ It verifies:
 - cache directories
 - `index.json`
 - Spotify status through `playerctl`
+
+If Kitty is missing, `lyrics --health` reports it as `WARN` because `lyrics --current` can still work.
 
 ### `lyrics --version`
 

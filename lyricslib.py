@@ -239,6 +239,16 @@ def render_single_line(text: str) -> None:
         return
     LAST_RENDER = state
 
+    if size.columns < 24 or size.lines < 6:
+        clear_screen()
+        line = (text or "").strip()
+        if not line:
+            print()
+        else:
+            print(line[: max(1, size.columns)].center(size.columns))
+        sys.stdout.flush()
+        return
+
     clear_screen()
     cols, rows = size.columns, size.lines
     wrapped = textwrap.wrap(text, width=max(18, min(52, cols - 8)), break_long_words=False, break_on_hyphens=False) or [""]
@@ -258,6 +268,16 @@ def render_message(title: str, lines: list[str]) -> None:
     if state == LAST_RENDER:
         return
     LAST_RENDER = state
+
+    if size.columns < 36 or size.lines < max(8, len(lines) + 4):
+        clear_screen()
+        payload = [title, *lines]
+        for index, line in enumerate(payload):
+            if index:
+                print()
+            print(line[: max(1, size.columns)])
+        sys.stdout.flush()
+        return
 
     clear_screen()
     cols, rows = size.columns, size.lines

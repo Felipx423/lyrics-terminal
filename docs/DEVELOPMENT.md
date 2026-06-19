@@ -188,6 +188,8 @@ What it does:
 - checks whether `index.json` is valid JSON
 - checks Spotify status through `playerctl`
 
+If Kitty is missing, `lyrics --health` reports it as `WARN` because `lyrics --current` can still work without it. Kitty remains required for the default launcher and `lyrics --kitty`.
+
 Important dependencies:
 
 - `playerctl`

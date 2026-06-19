@@ -53,9 +53,10 @@ Feedback é bem-vindo, especialmente sobre:
 - Spotify visível via MPRIS
 - `python3`
 - `playerctl`
-- `kitty` para o modo padrão com janela dedicada
+- `kitty` para o modo padrão com janela dedicada e para `lyrics --kitty`
+- Kitty não é necessário para `lyrics --current`
 - `sptlrx` para o fallback de renderização em tempo real
-- Toolchain do Go, caso você queira compilar o fetcher localmente
+- Toolchain do Go para compilar o `lyrics-fetch-go` durante a instalação
 
 ## Instalação
 
@@ -131,6 +132,7 @@ Use este modo quando quiser deixar a intenção de janela dedicada clara em scri
 Executa o runtime no terminal atual, sem abrir o Kitty.
 
 Use este modo quando quiser manter a saída na sessão ativa do terminal.
+Ele não depende de Kitty.
 
 ### `lyrics --health`
 
@@ -145,6 +147,8 @@ Ele confere:
 - diretórios de cache
 - `index.json`
 - o status do Spotify via `playerctl`
+
+Se o Kitty estiver ausente, `lyrics --health` o mostra como `WARN`, porque `lyrics --current` ainda pode funcionar.
 
 ### `lyrics --version`
 

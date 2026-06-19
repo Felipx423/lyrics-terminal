@@ -59,12 +59,12 @@ def run_health_check() -> int:
     checks = [
         check_command("spotify", "playerctl"),
         check_command("playerctl", "playerctl"),
-        check_command("kitty", "kitty"),
         check_command("sptlrx", "sptlrx"),
         check_command("lyrics-fetch-go", "lyrics-fetch-go"),
         check_cache_dir(),
         check_local_dir(),
         check_index_file(),
+        check_optional_kitty(),
     ]
     exit_code = 0
     for status, label, detail in checks:
@@ -72,6 +72,13 @@ def run_health_check() -> int:
         if status == "FAIL":
             exit_code = 1
     return exit_code
+
+
+def check_optional_kitty() -> tuple[str, str, str]:
+    path = shutil.which("kitty")
+    if not path:
+        return "WARN", "kitty", "not found in PATH (required only for default/--kitty mode)"
+    return "PASS", "kitty", path
 
 
 def check_command(label: str, command: str) -> tuple[str, str, str]:
