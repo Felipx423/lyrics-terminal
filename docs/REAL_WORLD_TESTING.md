@@ -149,6 +149,16 @@ Use logs to answer three questions:
 - did it choose the right source
 - did it preserve or reject cache entries correctly
 
+For slow or confusing cases, the per-track pipeline events in `lyrics.log` help separate:
+
+- a real cache hit: `cache_hit_initial` followed by `track_result=cache_hit`
+- a slow fetch that eventually succeeds: `cache_miss_initial`, `fetch_spawned`, `sptlrx_no_output`, `cache_appeared_after_fetch`, then `track_result=success_after_fetch`
+- a live fallback that actually rendered lyrics and never found a later local cache: `track_result=live_fallback_only`
+- a silent fallback with no later cache and no live output: `sptlrx_no_output` followed by `track_result=no_output_timeout`
+- a track switch before any cache hit, live output, or cache-appeared-after-fetch result is known: `track_result=track_changed_before_result`
+
+The events carry `track_id`, artist, title, album, and duration so near-matching versions of the same song can be distinguished during triage. The structured fetch-spawn event uses `component=lyrics-fetch-go`, which refers to the launcher-side fetcher component and not a lyrics provider.
+
 ## Final Checklist Before Closing the Milestone
 
 Before closing the milestone, confirm all of the following:

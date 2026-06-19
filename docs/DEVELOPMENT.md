@@ -450,6 +450,23 @@ The Python runtime logs events such as:
 - fetch success
 - fetch failure
 
+For per-track diagnosis, the launcher also records structured pipeline events in `lyrics.log`:
+
+- `cache_hit_initial`
+- `cache_miss_initial`
+- `fetch_spawned`
+- `sptlrx_started`
+- `sptlrx_no_output`
+- `cache_appeared_after_fetch`
+- `lyrics_local_started`
+- `track_result`
+
+`track_result` is the summary event for the final known outcome of a track. Typical values are `cache_hit`, `success_after_fetch`, `live_fallback_only`, `no_output_timeout`, `track_changed_before_result`, `interrupted`, and `error`.
+
+`track_changed_before_result` is only used when the track changes before any cache hit, live output, or cache-appeared-after-fetch signal has been recorded for that session. `live_fallback_only` means the runtime saw actual `sptlrx` output and never found a later local cache for that session. `success_after_fetch` means the local cache appeared after the pipeline had already started.
+
+These events include `track_id`, artist, title, album, and duration so near-matching versions of the same song can be separated during triage. The structured `fetch_spawned` event records `component=lyrics-fetch-go` because it describes the launcher-side fetcher component, not a lyrics provider.
+
 The Go code also logs cache and provider events through its own debug and event paths.
 
 ### Log rotation

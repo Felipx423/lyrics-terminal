@@ -107,6 +107,14 @@ class FakeLib:
         return ("1.2.3", "abcdef0", "2024-01-02T03:04:05Z")
 
 
+def logged_events(fake_lib: FakeLib) -> list[tuple[str, object]]:
+    return [value for label, value in fake_lib.calls if label == "log_event"]
+
+
+def event_payloads(fake_lib: FakeLib, event_name: str) -> list[object]:
+    return [payload for name, payload in logged_events(fake_lib) if name == event_name]
+
+
 class LyricsPlaylistTest(unittest.TestCase):
     def test_track_change_restarts_pipeline(self) -> None:
         module = load_script_module()
@@ -141,6 +149,8 @@ class LyricsPlaylistTest(unittest.TestCase):
         self.assertIn(("pipeline_restart", "restarting_pipeline"), debug_logs)
         self.assertIn(("fetch_spawned", "pid=4321"), debug_logs)
         self.assertIn(("no_output_timeout", "10s"), debug_logs)
+        track_results = event_payloads(fake_lib, "track_result")
+        self.assertTrue(any(payload.get("result") == "track_changed_before_result" for payload in track_results))
 
     def test_runtime_flags_propagate_no_output_timeout(self) -> None:
         module = load_script_module()
@@ -199,6 +209,323 @@ class LyricsPlaylistTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(calls, [("kitty", True, module.DEFAULT_NO_OUTPUT_SECONDS)])
+
+    def test_run_terminal_logs_initial_cache_hit_and_cache_hit_result(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Cached Song", album="", duration_ms=180000, track_id="1")
+        fake_lib = FakeLib(
+            statuses=["playing", "stopped"],
+            tracks=[track, track],
+            local_paths={"Cached Song": "/tmp/cached-song.lrc"},
+        )
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.spawn_background_fetch = lambda track, debug=False: (_ for _ in ()).throw(AssertionError("spawn_background_fetch should not run on cache hit"))
+        module.stream_sptlrx = lambda track, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: (_ for _ in ()).throw(AssertionError("stream_sptlrx should not run on cache hit"))
+        module.exec_lyrics_local = lambda debug=False: 0
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 0)
+        cache_hit_initial = event_payloads(fake_lib, "cache_hit_initial")
+        track_results = event_payloads(fake_lib, "track_result")
+        lyrics_local_started = event_payloads(fake_lib, "lyrics_local_started")
+        self.assertEqual(len(cache_hit_initial), 1)
+        self.assertEqual(len(lyrics_local_started), 1)
+        self.assertTrue(any(payload.get("result") == "cache_hit" for payload in track_results))
+        self.assertEqual(cache_hit_initial[0]["track_id"], "1")
+        self.assertEqual(cache_hit_initial[0]["artist"], "Artist")
+        self.assertEqual(cache_hit_initial[0]["title"], "Cached Song")
+        self.assertEqual(cache_hit_initial[0]["album"], "")
+        self.assertEqual(cache_hit_initial[0]["duration_s"], 180.0)
+        cache_hit_result = next(payload for payload in track_results if payload.get("result") == "cache_hit")
+        self.assertEqual(cache_hit_result["track_id"], "1")
+        self.assertEqual(cache_hit_result["artist"], "Artist")
+        self.assertEqual(cache_hit_result["title"], "Cached Song")
+        self.assertEqual(cache_hit_result["album"], "")
+        self.assertEqual(cache_hit_result["duration_s"], 180.0)
+
+    def test_run_terminal_logs_success_after_fetch_when_cache_appears_later(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Slow Song", album="", duration_ms=180000, track_id="1")
+        other = types.SimpleNamespace(artist="Artist Two", title="Later Song", album="", duration_ms=200000, track_id="2")
+        local_paths = {"Slow Song": None, "Later Song": None}
+        fake_lib = FakeLib(
+            statuses=["playing"] * 20 + ["stopped"],
+            tracks=[track] * 20 + [other] * 5,
+            local_paths=local_paths,
+        )
+        sleep_calls = {"count": 0}
+        exec_calls = {"count": 0}
+
+        def fake_sleep(_seconds):
+            sleep_calls["count"] += 1
+            if sleep_calls["count"] == 2:
+                local_paths["Slow Song"] = "/tmp/slow-song.lrc"
+
+        def fake_stream_sptlrx(track, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS):
+            proc = types.SimpleNamespace(stdout=object(), poll=lambda: 0, pid=99)
+            read_calls = iter([None])
+
+            def fake_read_line(_proc, timeout):
+                return next(read_calls, None)
+
+            module.read_line = fake_read_line
+            return module.stream_sptlrx_lines(proc, track, no_output_timeout=no_output_timeout)
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = fake_sleep
+        module.spawn_background_fetch = lambda track, debug=False: 4321
+        module.stream_sptlrx = fake_stream_sptlrx
+        def fake_exec_lyrics_local(debug=False):
+            exec_calls["count"] += 1
+            if exec_calls["count"] == 2:
+                return module.EXIT_TRACK_CHANGED
+            return 0
+
+        module.exec_lyrics_local = fake_exec_lyrics_local
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 0)
+        self.assertGreaterEqual(sleep_calls["count"], 1)
+        cache_miss_initial = [payload for payload in event_payloads(fake_lib, "cache_miss_initial") if payload.get("track_id") == "1"]
+        self.assertEqual(len(cache_miss_initial), 1)
+        fetch_spawned = [payload for payload in event_payloads(fake_lib, "fetch_spawned") if payload.get("track_id") == "1"]
+        self.assertEqual(len(fetch_spawned), 1)
+        self.assertEqual(fetch_spawned[0]["component"], "lyrics-fetch-go")
+        self.assertEqual(len([payload for payload in event_payloads(fake_lib, "sptlrx_started") if payload.get("track_id") == "1"]), 1)
+        sptlrx_no_output = [payload for payload in event_payloads(fake_lib, "sptlrx_no_output") if payload.get("track_id") == "1"]
+        self.assertEqual(len(sptlrx_no_output), 1)
+        self.assertEqual(sptlrx_no_output[0]["track"], "Artist - Slow Song")
+        self.assertEqual(sptlrx_no_output[0]["track_id"], "1")
+        self.assertEqual(sptlrx_no_output[0]["artist"], "Artist")
+        self.assertEqual(sptlrx_no_output[0]["title"], "Slow Song")
+        self.assertEqual(sptlrx_no_output[0]["album"], "")
+        self.assertEqual(sptlrx_no_output[0]["duration_s"], 180.0)
+        self.assertGreaterEqual(sptlrx_no_output[0]["elapsed_s"], 0.0)
+        self.assertEqual(sptlrx_no_output[0]["reason"], "proc_exited_without_output")
+        self.assertEqual(len([payload for payload in event_payloads(fake_lib, "cache_appeared_after_fetch") if payload.get("track_id") == "1"]), 1)
+        self.assertGreaterEqual(len([payload for payload in event_payloads(fake_lib, "lyrics_local_started") if payload.get("track_id") == "1"]), 1)
+        debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
+        self.assertIn(("local_lrc", "appeared"), debug_logs)
+        track_results = [payload for payload in event_payloads(fake_lib, "track_result") if payload.get("track_id") == "1"]
+        self.assertTrue(any(payload.get("result") == "success_after_fetch" for payload in track_results))
+        self.assertFalse(any(payload.get("result") == "track_changed_before_result" for payload in track_results))
+        self.assertTrue(any(payload.get("track_id") == "1" and payload.get("result") == "success_after_fetch" for payload in track_results))
+
+    def test_stream_sptlrx_lines_reports_real_timeout_without_output(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Silent Song", album="Album", duration_ms=180000, track_id="track-999")
+        fake_lib = FakeLib(
+            statuses=["playing", "playing", "playing", "playing", "playing"],
+            tracks=[track, track, track, track, track],
+            local_paths={},
+        )
+        monotonic = {"value": 0.0}
+
+        def fake_monotonic():
+            monotonic["value"] += 0.6
+            return monotonic["value"]
+
+        module.lib = fake_lib
+        module.time.monotonic = fake_monotonic
+        module.read_line = lambda proc, timeout: None
+        module.time.sleep = lambda *_args, **_kwargs: None
+
+        proc = types.SimpleNamespace(stdout=object(), poll=lambda: None, pid=99)
+        session = module.new_track_session(track)
+        module.set_active_track_session(session)
+        try:
+            status, next_track = module.stream_sptlrx_lines(proc, track, no_output_timeout=1.0)
+        finally:
+            module.set_active_track_session(None)
+
+        self.assertEqual(status, "no_output")
+        self.assertIsNone(next_track)
+        debug_logs = [value for label, value in fake_lib.calls if label == "debug_log"]
+        self.assertIn(("sptlrx_no_output", "1s_without_output"), debug_logs)
+        payloads = event_payloads(fake_lib, "sptlrx_no_output")
+        self.assertEqual(len(payloads), 1)
+        payload = payloads[0]
+        self.assertEqual(payload["track"], "Artist - Silent Song")
+        self.assertEqual(payload["track_id"], "track-999")
+        self.assertEqual(payload["artist"], "Artist")
+        self.assertEqual(payload["title"], "Silent Song")
+        self.assertEqual(payload["album"], "Album")
+        self.assertEqual(payload["duration_s"], 180.0)
+        self.assertGreater(payload["elapsed_s"], 0.0)
+        self.assertEqual(payload["timeout_s"], "1")
+        self.assertEqual(payload["reason"], "no_output_timeout")
+
+    def test_run_terminal_keeps_cache_hit_result_when_track_changes_later(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Cached Song", album="", duration_ms=180000, track_id="1")
+        next_track = types.SimpleNamespace(artist="Artist Two", title="Next Song", album="", duration_ms=200000, track_id="2")
+        fake_lib = FakeLib(
+            statuses=["playing", "playing", "stopped"],
+            tracks=[track, track, next_track],
+            local_paths={"Cached Song": "/tmp/cached-song.lrc", "Next Song": None},
+        )
+        exec_results = iter([0, module.EXIT_TRACK_CHANGED])
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.spawn_background_fetch = lambda track, debug=False: 4321
+        module.stream_sptlrx = lambda track, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS: (_ for _ in ()).throw(AssertionError("stream_sptlrx should not run on cache hit"))
+        module.exec_lyrics_local = lambda debug=False: next(exec_results)
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 0)
+        track_results = event_payloads(fake_lib, "track_result")
+        self.assertTrue(any(payload.get("track_id") == "1" and payload.get("result") == "cache_hit" for payload in track_results))
+        self.assertFalse(any(payload.get("result") == "track_changed_before_result" and payload.get("track_id") == "1" for payload in track_results))
+
+    def test_run_terminal_keeps_live_fallback_result_when_track_changes_later(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Live Song", album="", duration_ms=180000, track_id="1")
+        next_track = types.SimpleNamespace(artist="Artist Two", title="Next Song", album="", duration_ms=200000, track_id="2")
+        fake_lib = FakeLib(
+            statuses=["playing", "playing", "stopped"],
+            tracks=[track, track, track, next_track, next_track],
+            local_paths={"Live Song": None, "Next Song": None},
+        )
+        rendered: list[str] = []
+
+        def fake_stream_sptlrx(track, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS):
+            proc = types.SimpleNamespace(stdout=object(), poll=lambda: None, pid=99)
+            read_calls = iter(["real line\n"])
+
+            def fake_read_line(_proc, timeout):
+                return next(read_calls, None)
+
+            module.read_line = fake_read_line
+            module.lib.render_single_line = lambda text: rendered.append(text)
+            return module.stream_sptlrx_lines(proc, track, no_output_timeout=no_output_timeout)
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.spawn_background_fetch = lambda track, debug=False: 4321
+        module.stream_sptlrx = fake_stream_sptlrx
+        module.exec_lyrics_local = lambda debug=False: 0
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(rendered, ["real line"])
+        track_results = event_payloads(fake_lib, "track_result")
+        self.assertTrue(any(payload.get("track_id") == "1" and payload.get("result") == "live_fallback_only" for payload in track_results))
+        self.assertFalse(any(payload.get("result") == "track_changed_before_result" and payload.get("track_id") == "1" for payload in track_results))
+
+    def test_run_terminal_logs_no_output_timeout_when_cache_never_appears(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Silent Song", album="", duration_ms=180000, track_id="1")
+        fake_lib = FakeLib(
+            statuses=["playing", "stopped"],
+            tracks=[track, track],
+            local_paths={"Silent Song": None},
+        )
+
+        def fake_stream_sptlrx(track, no_output_timeout=module.DEFAULT_NO_OUTPUT_SECONDS):
+            fake_lib.log_event("sptlrx_no_output", {"reason": "no_output_timeout", "track": track.title})
+            return "no_output", None
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.spawn_background_fetch = lambda track, debug=False: 4321
+        module.stream_sptlrx = fake_stream_sptlrx
+        module.exec_lyrics_local = lambda debug=False: 0
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 0)
+        track_results = event_payloads(fake_lib, "track_result")
+        self.assertTrue(any(payload.get("result") == "no_output_timeout" for payload in track_results))
+        self.assertEqual(len(event_payloads(fake_lib, "sptlrx_no_output")), 1)
+
+    def test_run_terminal_logs_interrupted_result_and_restores_terminal(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Interrupted Song", album="Album", duration_ms=181000, track_id="track-123")
+        fake_lib = FakeLib(
+            statuses=["playing", "playing"],
+            tracks=[track, track],
+            local_paths={"Interrupted Song": "/tmp/interrupted-song.lrc"},
+        )
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.exec_lyrics_local = lambda debug=False: (_ for _ in ()).throw(KeyboardInterrupt())
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 130)
+        track_results = event_payloads(fake_lib, "track_result")
+        self.assertEqual(len(track_results), 1)
+        self.assertEqual(track_results[0]["result"], "interrupted")
+        self.assertEqual(track_results[0]["track_id"], "track-123")
+        self.assertEqual(track_results[0]["artist"], "Artist")
+        self.assertEqual(track_results[0]["title"], "Interrupted Song")
+        self.assertEqual(track_results[0]["album"], "Album")
+        self.assertEqual(track_results[0]["duration_s"], 181.0)
+        self.assertIn(("restore_terminal", None), fake_lib.calls)
+
+    def test_run_terminal_logs_interrupted_result_for_systemexit_zero(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Signal Song", album="Album", duration_ms=181000, track_id="track-456")
+        fake_lib = FakeLib(
+            statuses=["playing", "playing"],
+            tracks=[track, track],
+            local_paths={"Signal Song": "/tmp/signal-song.lrc"},
+        )
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.exec_lyrics_local = lambda debug=False: (_ for _ in ()).throw(SystemExit(0))
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 130)
+        track_results = event_payloads(fake_lib, "track_result")
+        self.assertEqual(len(track_results), 1)
+        self.assertEqual(track_results[0]["result"], "interrupted")
+        self.assertEqual(track_results[0]["track_id"], "track-456")
+        self.assertEqual(track_results[0]["artist"], "Artist")
+        self.assertEqual(track_results[0]["title"], "Signal Song")
+        self.assertEqual(track_results[0]["album"], "Album")
+        self.assertEqual(track_results[0]["duration_s"], 181.0)
+        self.assertIn(("restore_terminal", None), fake_lib.calls)
+
+    def test_run_terminal_logs_error_result_for_systemexit_non_zero(self) -> None:
+        module = load_script_module()
+        track = types.SimpleNamespace(artist="Artist", title="Error Song", album="Album", duration_ms=181000, track_id="track-789")
+        fake_lib = FakeLib(
+            statuses=["playing", "playing"],
+            tracks=[track, track],
+            local_paths={"Error Song": "/tmp/error-song.lrc"},
+        )
+
+        module.lib = fake_lib
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
+        module.time.sleep = lambda *_args, **_kwargs: None
+        module.exec_lyrics_local = lambda debug=False: (_ for _ in ()).throw(SystemExit(7))
+
+        result = module.run_terminal(debug=True)
+
+        self.assertEqual(result, 7)
+        track_results = event_payloads(fake_lib, "track_result")
+        self.assertEqual(len(track_results), 1)
+        self.assertEqual(track_results[0]["result"], "error")
+        self.assertEqual(track_results[0]["exit_code"], 7)
+        self.assertIn(("restore_terminal", None), fake_lib.calls)
 
     def test_main_version_prints_metadata(self) -> None:
         module = load_script_module()
