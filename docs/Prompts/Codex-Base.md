@@ -33,6 +33,15 @@ Leia também quando a tarefa envolver testes reais, logs, métricas, timeouts, e
 
 Se houver conflito entre documentação e código, trate o código como fonte de verdade e registre a inconsistência na documentação relevante.
 
+## Tooling
+
+Prefer using available local tools when relevant:
+- `rg`, `fd`, `jq`
+- `shellcheck`, `shfmt`
+- `go test ./...`, `goimports`
+- `ruff`, `pytest`
+
+Do not fail the task only because an optional tool is missing. Mention missing tools in the final summary.
 ## Regras Gerais
 
 - Não faça commit, push, merge, release ou alteração de issue sem instrução explícita.
