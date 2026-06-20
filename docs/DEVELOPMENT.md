@@ -634,7 +634,19 @@ Testing rules to keep:
 - do not use `t.Parallel()` in tests that mutate package-global path variables
 
 The path-isolation tests in `lyrics_fetch_go/cache_test.go` follow this rule by restoring globals with `t.Cleanup()`.
+## Recommended local tools
 
+These tools help with search, formatting, scripts and tests:```
+
+bashsudo pacman -S ripgrep fd jq shellcheck shfmtgo install golang.org/x/tools/cmd/goimports@latestpipx install ruff pytest
+
+Use them when relevant:
+
+- `ripgrep` / `fd`: search files fast
+- `jq`: inspect JSON logs/output
+- `shellcheck` / `shfmt`: check shell scripts
+- `goimports`: format Go imports
+- `ruff` / `pytest`: lint/test Python
 ## 12. Debugging Playbook
 
 ### Wrong lyrics displayed
